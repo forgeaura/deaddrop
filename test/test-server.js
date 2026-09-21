@@ -700,6 +700,35 @@ exit 0
       assert.ok(cliStdout.includes("Settings server stopped."));
       console.log("✓ CLI spawn and SIGINT clean shutdown passed with exit code 0");
 
+      // 9j: POST /api/config rejects submitted agent with no wake_method when no on-disk record exists (400)
+      const freshMailboxDir = path.join(testDir, "fresh-mailbox-test");
+      ensureDirectory(freshMailboxDir);
+      const { server: freshServer, url: freshUrl, close: closeFreshServer } =
+        await startSettingsServer({ port: 0, deaddropDir: freshMailboxDir });
+
+      try {
+        const noMethodRes = await fetch(`${freshUrl}api/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agents: {
+              antigravity: {
+                wake_on_mail: true,
+                conversation_id: "test-conv-id"
+              }
+            }
+          })
+        });
+        assert.equal(noMethodRes.status, 400);
+        const noMethodErr = await noMethodRes.json();
+        assert.ok(noMethodErr.error.includes("Missing required 'wake_method'"));
+        assert.equal(fs.existsSync(path.join(freshMailboxDir, ".config.json")), false, ".config.json must not be created on rejected POST");
+        console.log("✓ POST /api/config rejects agent missing wake_method when no on-disk record exists (400)");
+      } finally {
+        await closeFreshServer();
+      }
+
+
     } finally {
       await closeSettingsServer();
       console.log("✓ Settings server closed cleanly");
