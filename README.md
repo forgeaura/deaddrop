@@ -238,4 +238,4 @@ Run the server with `--agent=<name>` (or set `DEADDROP_AGENT=<name>`), pointed a
 
 ## License
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE) — if you modify Dead Drop and run it as a network service, you must make your modified source available to users of that service.
