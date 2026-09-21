@@ -88,7 +88,28 @@ Each key under `agents` is a recipient name (matched case-insensitively against 
 - **`conversation_id`** *(required when `wake_method` is `"agentapi"`)*: the ID of the one dedicated conversation this agent should be woken in. Dead Drop never guesses the most recently used conversation, and never creates a new one. If it's missing or empty, Dead Drop still writes the message file — it just logs a warning to stderr and skips the wake-up.
 - **`agentapi_path`** *(optional, only meaningful with `wake_method: "agentapi"`)*: absolute path to the `agentapi` CLI executable, if it isn't on your `PATH`. Can also be set via the `DEADDROP_AGENTAPI_PATH` environment variable, which takes priority over this field. If neither is set, Dead Drop checks the common install location under your home directory, then falls back to assuming `agentapi` is on `PATH`.
 
-A settings UI to manage this file per agent is planned as a follow-up; for now it's a plain JSON file you edit by hand.
+### Settings Web UI (`deaddrop settings`)
+
+To view and edit agent wake configurations without hand-editing JSON, start the local settings UI:
+
+```bash
+npm run settings
+# or
+node index.js settings [--port=3344]
+# or
+npx deaddrop settings
+```
+
+This starts a lightweight, on-demand local HTTP server that:
+- **Binds to loopback only**: strictly `127.0.0.1` (never `0.0.0.0`), running only in the foreground while the command is active. Press `Ctrl+C` to stop.
+- **Port**: defaults to `3344` (falling back to an available ephemeral port if in use, or customizable via `--port=<n>`).
+- **Agent Wake Configuration**:
+  - Dynamically lists all agents configured under `agents`.
+  - Lets you toggle `wake_on_mail` per agent.
+  - Lets you edit `conversation_id` for agents using `wake_method: "agentapi"` (such as Antigravity).
+  - Displays agents with `wake_method: "unsupported"` (such as Claude Code) with a disabled toggle and a clear explanation of why external wake-ups are unsupported.
+  - Atomically saves configuration edits back to `<mailbox>/.config.json` while preserving unmanaged properties.
+- **Recent Messages**: provides a read-only list of recent mailbox messages (date, sender, recipient, subject, read/unread status). Message bodies are not rendered.
 
 ### Environment variables
 

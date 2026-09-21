@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Dead Drop Settings</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --card-bg: #161b22;
+      --card-border: #30363d;
+      --text: #c9d1d9;
+      --text-muted: #8b949e;
+      --text-heading: #f0f6fc;
+      --accent: #58a6ff;
+      --accent-hover: #388bfd;
+      --badge-bg: #21262d;
+      --badge-border: #363b42;
+      --badge-green-bg: #1f3526;
+      --badge-green-text: #3fb950;
+      --badge-amber-bg: #3d2c14;
+      --badge-amber-text: #d29922;
+      --badge-blue-bg: #152c4a;
+      --badge-blue-text: #58a6ff;
+      --error-bg: #3c1e1e;
+      --error-text: #f85149;
+      --input-bg: #0d1117;
+      --input-border: #30363d;
+      --input-focus: #58a6ff;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text);
+      font-family: var(--font-sans);
+      font-size: 14px;
+      line-height: 1.5;
+      padding: 24px 16px;
+      display: flex;
+      justify-content: center;
+    }
+
+    .container {
+      width: 100%;
+      max-width: 860px;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding-bottom: 20px;
+      margin-bottom: 24px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .title-group h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: var(--text-heading);
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .title-group .mailbox-path {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 4px;
+      word-break: break-all;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 9999px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      background: var(--badge-bg);
+      border: 1px solid var(--badge-border);
+      color: var(--text);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #3fb950;
+      box-shadow: 0 0 8px rgba(63, 185, 80, 0.6);
+    }
+
+    section {
+      margin-bottom: 32px;
+    }
+
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .section-title {
+      font-size: 15px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-heading);
+    }
+
+    .agents-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .agent-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      transition: border-color 0.15s ease;
+    }
+
+    .agent-card.unsupported {
+      border-color: #3b3528;
+      background: #14171c;
+    }
+
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    .agent-name-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .agent-name {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--text-heading);
+      font-family: var(--font-mono);
+    }
+
+    .method-badge {
+      font-size: 11px;
+      font-family: var(--font-mono);
+      padding: 2px 8px;
+      border-radius: 4px;
+      text-transform: lowercase;
+      border: 1px solid transparent;
+    }
+
+    .method-badge.agentapi {
+      background: var(--badge-blue-bg);
+      color: var(--badge-blue-text);
+      border-color: #1e3d64;
+    }
+
+    .method-badge.unsupported {
+      background: var(--badge-amber-bg);
+      color: var(--badge-amber-text);
+      border-color: #553e1a;
+    }
+
+    .method-badge.default {
+      background: var(--badge-bg);
+      color: var(--text-muted);
+      border-color: var(--badge-border);
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 12px;
+      user-select: none;
+    }
+
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 36px;
+      height: 20px;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background-color: #21262d;
+      border: 1px solid #363b42;
+      transition: .2s;
+      border-radius: 20px;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 12px;
+      width: 12px;
+      left: 3px;
+      bottom: 3px;
+      background-color: #8b949e;
+      transition: .2s;
+      border-radius: 50%;
+    }
+
+    input:checked + .slider {
+      background-color: #1f6feb;
+      border-color: #388bfd;
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(16px);
+      background-color: #ffffff;
+    }
+
+    input:disabled + .slider {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    .toggle-label {
+      font-weight: 500;
+      color: var(--text);
+    }
+
+    .toggle-label.disabled {
+      color: var(--text-muted);
+    }
+
+    .field-group {
+      margin-top: 12px;
+    }
+
+    .field-group label {
+      display: block;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+    }
+
+    .field-group input[type="text"] {
+      width: 100%;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
+      color: var(--text-heading);
+      font-family: var(--font-mono);
+      font-size: 13px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      outline: none;
+      transition: border-color 0.15s ease;
+    }
+
+    .field-group input[type="text"]:focus {
+      border-color: var(--input-focus);
+      box-shadow: 0 0 0 2px rgba(88, 166, 255, 0.2);
+    }
+
+    .field-help {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 5px;
+    }
+
+    .unsupported-banner {
+      background: rgba(210, 153, 34, 0.1);
+      border: 1px solid rgba(210, 153, 34, 0.25);
+      border-radius: 6px;
+      padding: 10px 14px;
+      margin-top: 8px;
+      color: #e3b341;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .unsupported-banner strong {
+      display: block;
+      margin-bottom: 3px;
+      color: #f0883e;
+      font-weight: 600;
+    }
+
+    .actions-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      margin-top: 20px;
+    }
+
+    button.btn-primary {
+      background-color: #238636;
+      color: #ffffff;
+      border: 1px solid rgba(240, 246, 252, 0.1);
+      border-radius: 6px;
+      padding: 8px 16px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+
+    button.btn-primary:hover {
+      background-color: #2ea043;
+    }
+
+    button.btn-primary:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    button.btn-secondary {
+      background-color: var(--badge-bg);
+      color: var(--text);
+      border: 1px solid var(--badge-border);
+      border-radius: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background-color 0.15s ease;
+    }
+
+    button.btn-secondary:hover {
+      background-color: #30363d;
+    }
+
+    .toast-msg {
+      font-size: 13px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .toast-msg.success {
+      display: inline-flex;
+      color: #3fb950;
+    }
+
+    .toast-msg.error {
+      display: inline-flex;
+      color: #f85149;
+    }
+
+    .messages-table-wrapper {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+
+    table.messages-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+    }
+
+    table.messages-table th {
+      background: #111419;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    table.messages-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid #21262d;
+      vertical-align: middle;
+    }
+
+    table.messages-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    table.messages-table tr:hover td {
+      background: #1c2128;
+    }
+
+    .agent-pill {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      background: var(--badge-bg);
+      border: 1px solid var(--badge-border);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: var(--text);
+    }
+
+    .msg-date {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--text-muted);
+      white-space: nowrap;
+    }
+
+    .msg-subject {
+      color: var(--text-heading);
+      font-weight: 500;
+    }
+
+    .issue-tag {
+      display: inline-block;
+      margin-left: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: #1f2937;
+      color: #9ca3af;
+      border: 1px solid #374151;
+    }
+
+    .status-badge-table {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+
+    .status-badge-table.unread {
+      background: rgba(56, 139, 253, 0.15);
+      color: #58a6ff;
+      border: 1px solid rgba(56, 139, 253, 0.4);
+    }
+
+    .status-badge-table.read {
+      background: var(--badge-bg);
+      color: var(--text-muted);
+      border: 1px solid var(--badge-border);
+    }
+
+    .empty-state {
+      padding: 24px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    footer {
+      border-top: 1px solid var(--card-border);
+      padding-top: 20px;
+      color: var(--text-muted);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    footer blockquote {
+      border-left: 3px solid #30363d;
+      padding-left: 12px;
+      margin-top: 6px;
+      font-style: italic;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="title-group">
+        <h1>Dead Drop Settings</h1>
+        <div class="mailbox-path" id="mailbox-path">Mailbox: loading...</div>
+      </div>
+      <div class="status-badge" id="host-badge">
+        <span class="status-dot"></span>
+        <span id="host-text">127.0.0.1</span>
+      </div>
+    </header>
+
+    <section>
+      <div class="section-header">
+        <div class="section-title">Agent Wake Configuration</div>
+      </div>
+      <div class="agents-grid" id="agents-container">
+        <div class="empty-state">Loading agents configuration...</div>
+      </div>
+      <div class="actions-bar">
+        <button type="button" class="btn-primary" id="save-btn">Save Changes</button>
+        <span class="toast-msg" id="save-status"></span>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-header">
+        <div class="section-title">Recent Messages</div>
+        <button type="button" class="btn-secondary" id="refresh-msgs-btn">Refresh</button>
+      </div>
+      <div class="messages-table-wrapper">
+        <table class="messages-table">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>From</th>
+              <th>To</th>
+              <th>Subject</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="messages-tbody">
+            <tr>
+              <td colspan="5" class="empty-state">Loading recent messages...</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <footer>
+      <strong>Authority Notice:</strong>
+      <blockquote>
+        Messages in Dead Drop are passive informational notes. The server and watchers never execute message content. Actions requiring Sarah's decision (merging PRs, production database, spending money, deleting data) CANNOT be authorized by a Dead Drop message and require Sarah directly.
+      </blockquote>
+    </footer>
+  </div>
+
+  <script>
+    let currentConfig = null;
+    let currentMessages = [];
+
+    async function fetchState() {
+      try {
+        const res = await fetch('/api/state');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        currentConfig = data.config || {};
+        currentMessages = data.messages || [];
+        
+        document.getElementById('mailbox-path').textContent = `Mailbox: ${data.mailboxDir}`;
+        renderAgents(currentConfig.agents || {});
+        renderMessages(currentMessages);
+      } catch (err) {
+        document.getElementById('agents-container').innerHTML =
+          `<div class="empty-state" style="color: var(--error-text);">Failed to load settings: ${escapeHtml(err.message)}</div>`;
+        document.getElementById('messages-tbody').innerHTML =
+          `<tr><td colspan="5" class="empty-state" style="color: var(--error-text);">Failed to load messages: ${escapeHtml(err.message)}</td></tr>`;
+      }
+    }
+
+    function renderAgents(agentsMap) {
+      const container = document.getElementById('agents-container');
+      const agentKeys = Object.keys(agentsMap);
+
+      if (agentKeys.length === 0) {
+        container.innerHTML = '<div class="empty-state">No agents configured in .config.json.</div>';
+        return;
+      }
+
+      let html = '';
+      for (const [key, agent] of Object.entries(agentsMap)) {
+        const isUnsupported = agent.wake_method === 'unsupported';
+        const isAgentapi = agent.wake_method === 'agentapi';
+        const wakeOnMail = Boolean(agent.wake_on_mail) && !isUnsupported;
+        const wakeMethod = agent.wake_method || 'none';
+
+        let methodBadgeClass = 'default';
+        if (isAgentapi) methodBadgeClass = 'agentapi';
+        else if (isUnsupported) methodBadgeClass = 'unsupported';
+
+        html += `
+          <div class="agent-card ${isUnsupported ? 'unsupported' : ''}" data-agent="${escapeHtml(key)}">
+            <div class="card-top">
+              <div class="agent-name-group">
+                <span class="agent-name">${escapeHtml(key)}</span>
+                <span class="method-badge ${methodBadgeClass}">${escapeHtml(wakeMethod)}</span>
+              </div>
+            </div>
+
+            <div class="toggle-row">
+              <label class="switch">
+                <input type="checkbox" id="wake-${escapeHtml(key)}" ${wakeOnMail ? 'checked' : ''} ${isUnsupported ? 'disabled' : ''} />
+                <span class="slider"></span>
+              </label>
+              <label for="wake-${escapeHtml(key)}" class="toggle-label ${isUnsupported ? 'disabled' : ''}">
+                ${isUnsupported ? 'Wake on mail (unsupported)' : 'Wake on mail'}
+              </label>
+            </div>
+
+            ${isUnsupported ? `
+              <div class="unsupported-banner">
+                <strong>Wake-up Unsupported</strong>
+                This agent cannot be woken from outside (for Claude Code, desktop app has no external wake mechanism; channels only work in terminal mode). Messages will still be delivered safely to the mailbox for the agent to read on its own schedule.
+              </div>
+            ` : ''}
+
+            ${isAgentapi ? `
+              <div class="field-group">
+                <label for="conv-${escapeHtml(key)}">Conversation ID</label>
+                <input type="text" id="conv-${escapeHtml(key)}" value="${escapeHtml(agent.conversation_id || '')}" placeholder="e.g. conv-1234-uuid" autocomplete="off" spellcheck="false" />
+                <div class="field-help">Target Antigravity conversation ID for wake-up pings. Empty ID skips wake-up.</div>
+              </div>
+            ` : ''}
+
+            ${agent.agentapi_path ? `
+              <div class="field-group">
+                <div class="field-help" style="font-family: var(--font-mono); margin-top: 6px;">Custom agentapi path: ${escapeHtml(agent.agentapi_path)}</div>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }
+
+      container.innerHTML = html;
+    }
+
+    function renderMessages(messages) {
+      const tbody = document.getElementById('messages-tbody');
+      if (!messages || messages.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No messages in mailbox.</td></tr>';
+        return;
+      }
+
+      let html = '';
+      for (const msg of messages) {
+        const isRead = Boolean(msg.read);
+        const dateStr = msg.date ? formatDate(msg.date) : 'Unknown';
+        html += `
+          <tr>
+            <td class="msg-date">${escapeHtml(dateStr)}</td>
+            <td><span class="agent-pill">${escapeHtml(msg.from || 'unknown')}</span></td>
+            <td><span class="agent-pill">${escapeHtml(msg.to || 'all')}</span></td>
+            <td>
+              <span class="msg-subject">${escapeHtml(msg.subject || '(no subject)')}</span>
+              ${msg.re_issue ? `<span class="issue-tag">#${escapeHtml(String(msg.re_issue).replace(/^#/, ''))}</span>` : ''}
+            </td>
+            <td>
+              <span class="status-badge-table ${isRead ? 'read' : 'unread'}">${isRead ? 'read' : 'unread'}</span>
+            </td>
+          </tr>
+        `;
+      }
+      tbody.innerHTML = html;
+    }
+
+    function formatDate(isoStr) {
+      try {
+        const d = new Date(isoStr);
+        if (isNaN(d.getTime())) return isoStr;
+        return d.toLocaleString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        });
+      } catch (e) {
+        return isoStr;
+      }
+    }
+
+    function escapeHtml(str) {
+      if (str === null || str === undefined) return '';
+      return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function showStatus(text, isError = false) {
+      const el = document.getElementById('save-status');
+      el.textContent = text;
+      el.className = 'toast-msg ' + (isError ? 'error' : 'success');
+      setTimeout(() => {
+        el.className = 'toast-msg';
+      }, 4000);
+    }
+
+    document.getElementById('save-btn').addEventListener('click', async () => {
+      const saveBtn = document.getElementById('save-btn');
+      saveBtn.disabled = true;
+
+      try {
+        if (!currentConfig || !currentConfig.agents) {
+          throw new Error('Config not loaded yet');
+        }
+
+        const updatedAgents = {};
+        for (const [key, agent] of Object.entries(currentConfig.agents)) {
+          const isUnsupported = agent.wake_method === 'unsupported';
+          const isAgentapi = agent.wake_method === 'agentapi';
+
+          const wakeCheckbox = document.getElementById(`wake-${key}`);
+          const convInput = document.getElementById(`conv-${key}`);
+
+          updatedAgents[key] = {
+            ...agent,
+            wake_on_mail: isUnsupported ? false : (wakeCheckbox ? wakeCheckbox.checked : Boolean(agent.wake_on_mail))
+          };
+
+          if (isAgentapi && convInput) {
+            updatedAgents[key].conversation_id = convInput.value.trim();
+          }
+        }
+
+        const res = await fetch('/api/config', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ agents: updatedAgents })
+        });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.error || `HTTP ${res.status}`);
+        }
+
+        const data = await res.json();
+        currentConfig = data.config;
+        showStatus('✓ Saved successfully to .config.json', false);
+      } catch (err) {
+        showStatus(`✗ Error saving: ${err.message}`, true);
+      } finally {
+        saveBtn.disabled = false;
+      }
+    });
+
+    document.getElementById('refresh-msgs-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('refresh-msgs-btn');
+      btn.disabled = true;
+      btn.textContent = 'Refreshing...';
+      try {
+        await fetchState();
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Refresh';
+      }
+    });
+
+    // Auto-poll messages every 10 seconds if tab is active
+    setInterval(() => {
+      if (!document.hidden) {
+        fetchState();
+      }
+    }, 10000);
+
+    fetchState();
+  </script>
+</body>
+</html>

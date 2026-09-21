@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "test": "node test/test-server.js",
-    "setup-sidecar": "node scripts/setup-sidecar.js"
+    "setup-sidecar": "node scripts/setup-sidecar.js",
+    "settings": "node index.js settings"
   },
   "keywords": [
     "mcp",
