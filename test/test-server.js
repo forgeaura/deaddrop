@@ -108,6 +108,32 @@ async function runTests() {
     assert.ok(claudeAllAfter[0].read_at !== null);
     console.log(`✓ markRead successfully marked message read`);
 
+    // Test 5b: markRead rejects path traversal ids
+    console.log("\n[Test 5b] markRead rejects path traversal ids...");
+    const traversalTargetPath = path.join(os.tmpdir(), "evil.md");
+    // Ensure a plausible traversal target does NOT exist beforehand, and stays that way.
+    if (fs.existsSync(traversalTargetPath)) {
+      fs.unlinkSync(traversalTargetPath);
+    }
+    assert.throws(
+      () => markRead({ id: "../../../../tmp/evil", deaddropDir: testDir }),
+      /Invalid message id/,
+      "markRead should throw on a path-traversal id"
+    );
+    assert.equal(
+      fs.existsSync(traversalTargetPath),
+      false,
+      "markRead must not create a file outside deaddropDir"
+    );
+    // Also confirm nothing inside the isolated testDir was disturbed by the attempt.
+    const filesInTestDirAfterTraversal = fs.readdirSync(testDir).filter((f) => f.endsWith(".md"));
+    assert.equal(
+      filesInTestDirAfterTraversal.length,
+      1,
+      "markRead traversal attempt should not add/remove files in testDir"
+    );
+    console.log(`✓ markRead rejected path traversal id and touched no file outside testDir`);
+
     // Test 6: wakeAntigravityIfTargeted (Missing config file)
     console.log("\n[Test 6] Wake mechanism: missing .config.json...");
     const wakeNoConfig = await wakeAntigravityIfTargeted({
