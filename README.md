@@ -60,16 +60,35 @@ Hello! Dead Drop is live.
 
 ## Configuration
 
-All configuration lives in a single JSON file inside the mailbox folder: `<mailbox>/.config.json` (e.g. `~/deaddrop/.config.json`).
+All configuration lives in a single JSON file inside the mailbox folder: `<mailbox>/.config.json` (e.g. `~/deaddrop/.config.json`), under a per-agent `agents` map:
 
 ```json
 {
-  "antigravity_conversation_id": "<conversation-id>"
+  "agents": {
+    "antigravity": {
+      "wake_on_mail": true,
+      "wake_method": "agentapi",
+      "conversation_id": "<conversation-id>",
+      "agentapi_path": "/optional/custom/path/to/agentapi"
+    },
+    "claude": {
+      "wake_on_mail": false,
+      "wake_method": "unsupported"
+    }
+  }
 }
 ```
 
-- **`antigravity_conversation_id`**: the ID of the one dedicated conversation Antigravity's CLI (`agentapi`) should be woken in. Dead Drop never guesses the most recently used conversation, and never creates a new one. If this field is missing or empty, Dead Drop still writes the message file — it just logs a warning to stderr and skips the wake-up.
-- **`agentapi_path`** *(optional)*: absolute path to the Antigravity `agentapi` CLI executable, if it isn't on your `PATH`. Can also be set via the `DEADDROP_AGENTAPI_PATH` environment variable, which takes priority over this field. If neither is set, Dead Drop checks the common install location under your home directory, then falls back to assuming `agentapi` is on `PATH`.
+Each key under `agents` is a recipient name (matched case-insensitively against `to`/`for`), with:
+
+- **`wake_on_mail`** *(boolean)*: whether Dead Drop should try to wake this agent when mail arrives for it. Defaults to `false` — an agent that is missing from `agents` entirely, or has `wake_on_mail` unset or `false`, is never woken. Wake-up is opt-in only. Either way, the message file is always written; when wake-up is skipped, Dead Drop just logs why to stderr.
+- **`wake_method`**: how to wake this agent, dispatched by string so adding a new agent's wake method later doesn't require a schema change:
+  - `"agentapi"` — the only method that's actually wired up today. Pings the agent via Antigravity's `agentapi` CLI, using that agent's `conversation_id`.
+  - `"unsupported"` — this agent cannot be woken from outside at all. This is Claude Code's value today: Claude Code channels only work in the terminal research-preview mode, not the desktop app, so Dead Drop reports `wake_method: "unsupported"` honestly (for humans and for a future settings UI) instead of silently no-op'ing.
+- **`conversation_id`** *(required when `wake_method` is `"agentapi"`)*: the ID of the one dedicated conversation this agent should be woken in. Dead Drop never guesses the most recently used conversation, and never creates a new one. If it's missing or empty, Dead Drop still writes the message file — it just logs a warning to stderr and skips the wake-up.
+- **`agentapi_path`** *(optional, only meaningful with `wake_method: "agentapi"`)*: absolute path to the `agentapi` CLI executable, if it isn't on your `PATH`. Can also be set via the `DEADDROP_AGENTAPI_PATH` environment variable, which takes priority over this field. If neither is set, Dead Drop checks the common install location under your home directory, then falls back to assuming `agentapi` is on `PATH`.
+
+A settings UI to manage this file per agent is planned as a follow-up; for now it's a plain JSON file you edit by hand.
 
 ### Environment variables
 
