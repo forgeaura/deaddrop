@@ -9,6 +9,7 @@ import {
   readMessages,
   markRead
 } from "./lib/messages.js";
+import { startSettingsServer } from "./lib/settings-server.js";
 
 let defaultAgent = process.env.DEADDROP_AGENT || "unknown";
 const args = process.argv.slice(2);
@@ -141,6 +142,26 @@ server.tool(
 );
 
 async function main() {
+  if (args.includes("settings") || args[0] === "settings") {
+    let port = 3344;
+    for (let i = 0; i < args.length; i++) {
+      if (args[i].startsWith("--port=")) {
+        port = parseInt(args[i].split("=")[1], 10) || 3344;
+      } else if (args[i] === "--port" && args[i + 1]) {
+        port = parseInt(args[i + 1], 10) || 3344;
+        i++;
+      } else if (args[i].startsWith("--dir=")) {
+        process.env.DEADDROP_DIR = args[i].split("=")[1];
+      } else if (args[i] === "--dir" && args[i + 1]) {
+        process.env.DEADDROP_DIR = args[i + 1];
+        i++;
+      }
+    }
+    const resolvedDir = process.env.DEADDROP_DIR || DEFAULT_DEADDROP_DIR;
+    await startSettingsServer({ port, deaddropDir: resolvedDir, isCli: true });
+    return;
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`[Dead Drop] MCP server running on stdio (agent: ${defaultAgent}, dir: ${deaddropDir})`);

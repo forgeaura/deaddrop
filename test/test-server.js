@@ -21,6 +21,7 @@ import {
 } from "../lib/messages.js";
 import { exportSession, cleanupSession, getSessionFilePath } from "../bin/sidecar.js";
 import { setupSidecar } from "../scripts/setup-sidecar.js";
+import { startSettingsServer, loadConfig, saveConfig, DEFAULT_CONFIG } from "../lib/settings-server.js";
 
 async function runTests() {
   console.log("=== Starting Dead Drop Test Suite ===");
@@ -547,6 +548,191 @@ exit 0
 
     await client.close();
     console.log("✓ MCP Client transport closed cleanly");
+
+    // Test 9: Settings Web UI & API tests
+    console.log("\n[Test 9] Settings Web UI & API tests...");
+    const settingsTestDir = path.join(testDir, "settings-test");
+    ensureDirectory(settingsTestDir);
+
+    // 9a: Default config fallback
+    const initialConfig = loadConfig(settingsTestDir);
+    assert.deepEqual(initialConfig, DEFAULT_CONFIG);
+    assert.equal(initialConfig.agents.antigravity.wake_method, "agentapi");
+    assert.equal(initialConfig.agents.claude.wake_method, "unsupported");
+    console.log("✓ loadConfig returns DEFAULT_CONFIG when .config.json is absent");
+
+    // 9b: Start server on 127.0.0.1
+    const { server: settingsServer, port: settingsPort, url: settingsUrl, close: closeSettingsServer } =
+      await startSettingsServer({ port: 0, deaddropDir: settingsTestDir });
+
+    try {
+      assert.equal(settingsServer.address().address, "127.0.0.1");
+      console.log(`✓ Server bound strictly to 127.0.0.1 on port ${settingsPort}`);
+
+      // 9c: GET / returns HTML
+      const getHtmlRes = await fetch(settingsUrl);
+      assert.equal(getHtmlRes.status, 200);
+      assert.ok(getHtmlRes.headers.get("content-type").includes("text/html"));
+      const htmlBody = await getHtmlRes.text();
+      assert.ok(htmlBody.includes("Dead Drop Settings"));
+      assert.ok(htmlBody.includes("Agent Wake Configuration"));
+      assert.ok(htmlBody.includes("Recent Messages"));
+      console.log("✓ GET / returns HTML settings page");
+
+      // 9d: GET /api/state returns config, mailboxDir, and recent messages
+      // Create a test message in settingsTestDir first
+      await sendMessage({
+        to: "claude",
+        subject: "Settings UI Test Message",
+        body: "Top-secret message content which should NOT appear in recent messages list.",
+        re_issue: "4",
+        from: "antigravity",
+        deaddropDir: settingsTestDir
+      });
+
+      const getStateRes = await fetch(`${settingsUrl}api/state`);
+      assert.equal(getStateRes.status, 200);
+      const stateData = await getStateRes.json();
+      assert.ok(stateData.mailboxDir);
+      assert.ok(stateData.config.agents.antigravity);
+      assert.equal(stateData.messages.length, 1);
+      assert.equal(stateData.messages[0].subject, "Settings UI Test Message");
+      assert.equal(stateData.messages[0].re_issue, "4");
+      assert.strictEqual(stateData.messages[0].body, undefined, "Message body must not be included in recent messages API");
+      console.log("✓ GET /api/state returns config and message metadata without body");
+
+      // 9e: POST /api/config rejects non-json Content-Type
+      const plainTextRes = await fetch(`${settingsUrl}api/config`, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain" },
+        body: JSON.stringify({ agents: {} })
+      });
+      assert.equal(plainTextRes.status, 400);
+      const plainTextErr = await plainTextRes.json();
+      assert.ok(plainTextErr.error.includes("application/json"));
+      console.log("✓ POST /api/config rejects non-JSON Content-Type with 400");
+
+      // 9f: POST /api/config rejects malformed payloads
+      const invalidRes = await fetch(`${settingsUrl}api/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ agents: { antigravity: { wake_on_mail: "not-a-bool" } } })
+      });
+      assert.equal(invalidRes.status, 400);
+      console.log("✓ POST /api/config rejects invalid field types with 400");
+
+      // 9g: POST /api/config updates .config.json atomically
+      const updatePayload = {
+        agents: {
+          antigravity: {
+            wake_on_mail: true,
+            wake_method: "agentapi",
+            conversation_id: "conv-settings-999"
+          },
+          claude: {
+            wake_on_mail: true, // Should be forced to false because wake_method is unsupported
+            wake_method: "unsupported"
+          },
+          custom_agent: {
+            wake_on_mail: false,
+            wake_method: "unsupported"
+          }
+        }
+      };
+
+      const postRes = await fetch(`${settingsUrl}api/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(updatePayload)
+      });
+      assert.equal(postRes.status, 200);
+      const postData = await postRes.json();
+      assert.equal(postData.success, true);
+      assert.equal(postData.config.agents.antigravity.conversation_id, "conv-settings-999");
+      assert.equal(postData.config.agents.antigravity.wake_on_mail, true);
+      assert.equal(postData.config.agents.claude.wake_on_mail, false, "Unsupported agent must have wake_on_mail forced to false");
+      assert.ok(postData.config.agents.custom_agent, "Dynamically includes any configured agent keys");
+
+      // Verify file on disk survived
+      const diskConfig = JSON.parse(fs.readFileSync(path.join(settingsTestDir, ".config.json"), "utf8"));
+      assert.equal(diskConfig.agents.antigravity.conversation_id, "conv-settings-999");
+      assert.equal(diskConfig.agents.claude.wake_on_mail, false);
+      console.log("✓ POST /api/config saves valid config atomically to .config.json");
+
+      // 9h: Verify Dead Drop wakeAgentIfTargeted respects the updated config
+      // Toggle wake_on_mail to false for antigravity
+      await fetch(`${settingsUrl}api/config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agents: {
+            antigravity: {
+              wake_on_mail: false,
+              conversation_id: "conv-settings-999"
+            }
+          }
+        })
+      });
+
+      const wakeSkippedRes = await wakeAgentIfTargeted({
+        to: "antigravity",
+        from: "claude",
+        filename: "test.md",
+        deaddropDir: settingsTestDir
+      });
+      assert.equal(wakeSkippedRes.woke, false);
+      assert.ok(wakeSkippedRes.reason.includes("wake_on_mail is false"));
+      console.log("✓ wakeAgentIfTargeted correctly reads updated wake_on_mail: false from settings");
+
+      // 9i: CLI invocation and Ctrl-C (SIGINT) clean exit
+      const { spawn } = await import("node:child_process");
+      const cliChild = spawn(process.execPath, ["index.js", "settings", "--port=0", `--dir=${settingsTestDir}`], {
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      let cliStdout = "";
+      cliChild.stdout.on("data", (chunk) => { cliStdout += chunk.toString(); });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      assert.ok(cliStdout.includes("Settings server listening at http://127.0.0.1:"));
+      assert.ok(cliStdout.includes("Press Ctrl+C to stop."));
+      cliChild.kill("SIGINT");
+      const cliExitCode = await new Promise((resolve) => cliChild.on("exit", (code) => resolve(code)));
+      assert.equal(cliExitCode, 0);
+      assert.ok(cliStdout.includes("Settings server stopped."));
+      console.log("✓ CLI spawn and SIGINT clean shutdown passed with exit code 0");
+
+      // 9j: POST /api/config rejects submitted agent with no wake_method when no on-disk record exists (400)
+      const freshMailboxDir = path.join(testDir, "fresh-mailbox-test");
+      ensureDirectory(freshMailboxDir);
+      const { server: freshServer, url: freshUrl, close: closeFreshServer } =
+        await startSettingsServer({ port: 0, deaddropDir: freshMailboxDir });
+
+      try {
+        const noMethodRes = await fetch(`${freshUrl}api/config`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agents: {
+              antigravity: {
+                wake_on_mail: true,
+                conversation_id: "test-conv-id"
+              }
+            }
+          })
+        });
+        assert.equal(noMethodRes.status, 400);
+        const noMethodErr = await noMethodRes.json();
+        assert.ok(noMethodErr.error.includes("Missing required 'wake_method'"));
+        assert.equal(fs.existsSync(path.join(freshMailboxDir, ".config.json")), false, ".config.json must not be created on rejected POST");
+        console.log("✓ POST /api/config rejects agent missing wake_method when no on-disk record exists (400)");
+      } finally {
+        await closeFreshServer();
+      }
+
+
+    } finally {
+      await closeSettingsServer();
+      console.log("✓ Settings server closed cleanly");
+    }
 
     console.log("\n=== ALL TESTS PASSED SUCCESSFULLY ===");
   } finally {
