@@ -378,7 +378,8 @@ async function runTests() {
       sidecarConfigPath: setupConfigFile,
       sidecarScriptPath: "/fake/path/bin/sidecar.js",
       nodeExecutable: "/fake/node",
-      deaddropDir: "/fake/deaddrop"
+      deaddropDir: "/fake/deaddrop",
+      geminiConfigPath: path.join(setupDir, "config.json")
     });
     assert.ok(fs.existsSync(setupConfigFile));
     const loadedSetup = JSON.parse(fs.readFileSync(setupConfigFile, "utf8"));
@@ -386,7 +387,7 @@ async function runTests() {
     assert.deepEqual(loadedSetup.args, ["/fake/path/bin/sidecar.js"]);
     assert.equal(loadedSetup.env.DEADDROP_DIR, "/fake/deaddrop");
 
-    setupSidecar({ sidecarConfigPath: setupConfigFile, uninstall: true });
+    setupSidecar({ sidecarConfigPath: setupConfigFile, geminiConfigPath: path.join(setupDir, "config.json"), uninstall: true });
     assert.ok(!fs.existsSync(setupConfigFile));
     console.log("✓ setupSidecar registers valid JSON and uninstalls cleanly");
 
