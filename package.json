@@ -1,0 +1,21 @@
+{
+  "name": "deaddrop",
+  "version": "1.0.0",
+  "description": "A tiny local MCP server that lets AI coding agents on one machine leave each other Markdown messages.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test/test-server.js"
+  },
+  "keywords": ["mcp", "model-context-protocol", "agents"],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.5"
+  },
+  "type": "module",
+  "bin": {
+    "deaddrop": "./index.js"
+  }
+}
