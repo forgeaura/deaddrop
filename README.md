@@ -180,6 +180,33 @@ When using Dead Drop on multiple projects on the same machine, MCP registration 
 - **Shared on purpose (Cross-project coordination)**:
   Deliberately pointing two projects at the **same** `DEADDROP_DIR` (e.g. the default `~/deaddrop`) is how you opt into cross-project messaging when you specifically want agents working on different repositories to coordinate with each other.
 
+  For example, to share this mailbox with a second project in Antigravity, create `/Users/<you>/Repos/other-project/.agents/mcp_config.json`:
+
+  ```json
+  {
+    "mcpServers": {
+      "deaddrop": {
+        "command": "node",
+        "args": [
+          "/Users/<you>/Repos/deaddrop/index.js",
+          "--agent=antigravity"
+        ],
+        "env": {
+          "DEADDROP_DIR": "/Users/<you>/deaddrop"
+        }
+      }
+    }
+  }
+  ```
+
+  *(Remember to add `.agents/` to `.gitignore` in `other-project` too, since it contains local absolute paths. Adjust `--agent=` if you want a distinct identity for that project's agent).*
+
+  For Claude Code in the second project's folder:
+
+  ```bash
+  claude mcp add --scope local -e DEADDROP_DIR=/Users/<you>/deaddrop deaddrop node /Users/<you>/Repos/deaddrop/index.js -- --agent=claude
+  ```
+
 ### Antigravity Wake-Up & Sidecar Setup
 
 Antigravity's `agentapi` CLI requires two ephemeral credentials to communicate with the running IDE instance:
