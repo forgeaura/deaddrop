@@ -14,8 +14,13 @@ import {
   markRead,
   wakeAgentIfTargeted,
   getAgentapiExecutable,
-  AUTHORITY_NOTICE
+  AUTHORITY_NOTICE,
+  resolveAntigravitySession,
+  isPidAlive,
+  SESSION_FILENAME
 } from "../lib/messages.js";
+import { exportSession, cleanupSession, getSessionFilePath } from "../bin/sidecar.js";
+import { setupSidecar } from "../scripts/setup-sidecar.js";
 
 async function runTests() {
   console.log("=== Starting Dead Drop Test Suite ===");
@@ -269,6 +274,196 @@ async function runTests() {
     assert.equal(wakeUnsupported.woke, false);
     assert.match(wakeUnsupported.reason, /not a supported external wake method/);
     console.log(`✓ Correctly declined to wake an agent with wake_method 'unsupported'`);
+    // Test 7g: resolveAntigravitySession unit tests
+    console.log("\n[Test 7g] resolveAntigravitySession unit tests...");
+    const subSessionDir = path.join(testDir, "session-test");
+    ensureDirectory(subSessionDir);
+
+    // Save and clear env vars
+    const origLs = process.env.ANTIGRAVITY_LS_ADDRESS;
+    const origCsrf = process.env.ANTIGRAVITY_CSRF_TOKEN;
+    delete process.env.ANTIGRAVITY_LS_ADDRESS;
+    delete process.env.ANTIGRAVITY_CSRF_TOKEN;
+
+    // Missing file
+    const resMissing = resolveAntigravitySession({ deaddropDir: subSessionDir });
+    assert.equal(resMissing.valid, false);
+    assert.equal(resMissing.error, "missing");
+    assert.match(resMissing.reason, /npm run setup-sidecar/);
+
+    // Unreadable / malformed file
+    const sessionFile = path.join(subSessionDir, SESSION_FILENAME);
+    fs.writeFileSync(sessionFile, "{ not valid json", "utf8");
+    const resUnreadable = resolveAntigravitySession({ deaddropDir: subSessionDir });
+    assert.equal(resUnreadable.valid, false);
+    assert.equal(resUnreadable.error, "unreadable");
+
+    // Invalid fields
+    fs.writeFileSync(sessionFile, JSON.stringify({ address: "localhost:1234" }), "utf8");
+    const resInvalid = resolveAntigravitySession({ deaddropDir: subSessionDir });
+    assert.equal(resInvalid.valid, false);
+    assert.equal(resInvalid.error, "invalid");
+
+    // Stale PID
+    fs.writeFileSync(sessionFile, JSON.stringify({
+      address: "localhost:1234",
+      csrf_token: "tok-123",
+      pid: 999999999
+    }), "utf8");
+    const resStale = resolveAntigravitySession({ deaddropDir: subSessionDir });
+    assert.equal(resStale.valid, false);
+    assert.equal(resStale.error, "stale");
+    assert.match(resStale.reason, /stale/);
+
+    // Valid session file with current process PID (guaranteed alive)
+    fs.writeFileSync(sessionFile, JSON.stringify({
+      address: "localhost:57849",
+      csrf_token: "csrf-abc-xyz",
+      pid: process.pid
+    }), "utf8");
+    const resValid = resolveAntigravitySession({ deaddropDir: subSessionDir });
+    assert.equal(resValid.valid, true);
+    assert.equal(resValid.address, "localhost:57849");
+    assert.equal(resValid.csrfToken, "csrf-abc-xyz");
+    assert.equal(resValid.source, "session_file");
+
+    // Env var override
+    process.env.ANTIGRAVITY_LS_ADDRESS = "localhost:9999";
+    process.env.ANTIGRAVITY_CSRF_TOKEN = "env-token-xyz";
+    const resEnv = resolveAntigravitySession({ deaddropDir: subSessionDir });
+    assert.equal(resEnv.valid, true);
+    assert.equal(resEnv.address, "localhost:9999");
+    assert.equal(resEnv.csrfToken, "env-token-xyz");
+    assert.equal(resEnv.source, "env");
+
+    // Restore env vars
+    if (origLs) process.env.ANTIGRAVITY_LS_ADDRESS = origLs;
+    else delete process.env.ANTIGRAVITY_LS_ADDRESS;
+    if (origCsrf) process.env.ANTIGRAVITY_CSRF_TOKEN = origCsrf;
+    else delete process.env.ANTIGRAVITY_CSRF_TOKEN;
+    console.log("✓ resolveAntigravitySession handled all states (missing, unreadable, invalid, stale, valid, env)");
+
+    // Test 7h: sidecar exportSession and cleanupSession
+    console.log("\n[Test 7h] sidecar exportSession and cleanupSession...");
+    const sidecarTestDir = path.join(testDir, "sidecar-test");
+    ensureDirectory(sidecarTestDir);
+
+    const exported = exportSession({
+      address: "localhost:57849",
+      csrfToken: "tok-sidecar-1",
+      deaddropDir: sidecarTestDir,
+      pid: process.pid
+    });
+    assert.ok(exported);
+    assert.equal(exported.address, "localhost:57849");
+    assert.equal(exported.csrf_token, "tok-sidecar-1");
+
+    const exportedFile = getSessionFilePath(sidecarTestDir);
+    assert.ok(fs.existsSync(exportedFile));
+    const stat = fs.statSync(exportedFile);
+    if (process.platform !== "win32") {
+      assert.equal(stat.mode & 0o777, 0o600);
+    }
+
+    cleanupSession(sidecarTestDir);
+    assert.ok(!fs.existsSync(exportedFile));
+    console.log("✓ sidecar exportSession writes 0600 file and cleanupSession removes it");
+
+    // Test 7i: setupSidecar registration and uninstall
+    console.log("\n[Test 7i] setupSidecar registration and uninstallation...");
+    const setupDir = path.join(testDir, "setup-sidecar-test");
+    const setupConfigFile = path.join(setupDir, "sidecar.json");
+    const setupRes = setupSidecar({
+      sidecarDir: setupDir,
+      sidecarConfigPath: setupConfigFile,
+      sidecarScriptPath: "/fake/path/bin/sidecar.js",
+      nodeExecutable: "/fake/node",
+      deaddropDir: "/fake/deaddrop"
+    });
+    assert.ok(fs.existsSync(setupConfigFile));
+    const loadedSetup = JSON.parse(fs.readFileSync(setupConfigFile, "utf8"));
+    assert.equal(loadedSetup.command, "/fake/node");
+    assert.deepEqual(loadedSetup.args, ["/fake/path/bin/sidecar.js"]);
+    assert.equal(loadedSetup.env.DEADDROP_DIR, "/fake/deaddrop");
+
+    setupSidecar({ sidecarConfigPath: setupConfigFile, uninstall: true });
+    assert.ok(!fs.existsSync(setupConfigFile));
+    console.log("✓ setupSidecar registers valid JSON and uninstalls cleanly");
+
+    // Test 7j: Mock agentapi execution receives session env vars
+    console.log("\n[Test 7j] Mock agentapi verifies env vars passed from .antigravity_session.json...");
+    const e2eDir = path.join(testDir, "e2e-wake-test");
+    ensureDirectory(e2eDir);
+
+    // Save and clear env vars
+    delete process.env.ANTIGRAVITY_LS_ADDRESS;
+    delete process.env.ANTIGRAVITY_CSRF_TOKEN;
+
+    const mockOutputLog = path.join(e2eDir, "mock_agentapi_output.json");
+    const mockAgentapiScript = path.join(e2eDir, "mock_agentapi.sh");
+    fs.writeFileSync(mockAgentapiScript, `#!/bin/sh
+cat << EOF > "${mockOutputLog}"
+{
+  "address": "$ANTIGRAVITY_LS_ADDRESS",
+  "csrf_token": "$ANTIGRAVITY_CSRF_TOKEN",
+  "args": ["$1", "$2", "$3", "$4"]
+}
+EOF
+exit 0
+`, { mode: 0o755 });
+
+    // 1. Without session file -> wake skipped, reason mentions setup-sidecar
+    fs.writeFileSync(path.join(e2eDir, ".config.json"), JSON.stringify({
+      agents: {
+        antigravity: {
+          wake_on_mail: true,
+          wake_method: "agentapi",
+          conversation_id: "conv-target-999",
+          agentapi_path: mockAgentapiScript
+        }
+      }
+    }), "utf8");
+
+    const wakeNoSession = await wakeAgentIfTargeted({
+      to: "antigravity",
+      from: "claude",
+      filename: "test-mail.md",
+      deaddropDir: e2eDir
+    });
+    assert.equal(wakeNoSession.woke, false);
+    assert.match(wakeNoSession.reason, /npm run setup-sidecar/);
+    assert.ok(!fs.existsSync(mockOutputLog), "agentapi should not have been executed");
+
+    // 2. With valid session file -> wake succeeds and agentapi receives the env vars!
+    fs.writeFileSync(path.join(e2eDir, SESSION_FILENAME), JSON.stringify({
+      address: "localhost:61234",
+      csrf_token: "test-token-777",
+      pid: process.pid
+    }), { mode: 0o600 });
+
+    const wakeWithSession = await wakeAgentIfTargeted({
+      to: "antigravity",
+      from: "claude",
+      filename: "test-mail.md",
+      deaddropDir: e2eDir
+    });
+    assert.equal(wakeWithSession.woke, true);
+    assert.equal(wakeWithSession.conversationId, "conv-target-999");
+    assert.ok(fs.existsSync(mockOutputLog), "agentapi should have executed");
+
+    const mockResult = JSON.parse(fs.readFileSync(mockOutputLog, "utf8"));
+    assert.equal(mockResult.address, "localhost:61234");
+    assert.equal(mockResult.csrf_token, "test-token-777");
+    assert.equal(mockResult.args[0], "send-message");
+    assert.equal(mockResult.args[1], "--title=Dead Drop Mail");
+    assert.equal(mockResult.args[2], "conv-target-999");
+    assert.equal(mockResult.args[3], "New Dead Drop mail from claude: test-mail.md. Read it with read_messages.");
+
+    // Restore env vars
+    if (origLs) process.env.ANTIGRAVITY_LS_ADDRESS = origLs;
+    if (origCsrf) process.env.ANTIGRAVITY_CSRF_TOKEN = origCsrf;
+    console.log("✓ agentapi successfully received discovered ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CSRF_TOKEN");
+
 
     // Test 8: End-to-end Stdio MCP JSON-RPC protocol via MCP Client
     console.log("\n[Test 8] End-to-end Stdio MCP Client interaction...");

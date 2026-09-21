@@ -143,6 +143,29 @@ Add an entry to Antigravity's MCP config (e.g. `~/.gemini/config/mcp_config.json
 
 Replace `node` with an absolute path if `node` isn't on the `PATH` that Antigravity launches with, and `/path/to/deaddrop` with where you cloned this repo.
 
+### Antigravity Wake-Up & Sidecar Setup
+
+Antigravity's `agentapi` CLI requires two ephemeral credentials to communicate with the running IDE instance:
+- `ANTIGRAVITY_LS_ADDRESS`: Host and port of the active language server local RPC endpoint.
+- `ANTIGRAVITY_CSRF_TOKEN`: A per-launch authentication token.
+
+When Dead Drop runs in a process that Antigravity did not launch (such as Dead Drop's MCP server spawned by Claude Code), these environment variables are absent from `process.env`. To discover them reliably without fragile process-table scraping, Dead Drop uses an Antigravity **sidecar**:
+
+1. Run the sidecar registration command once:
+   ```bash
+   npm run setup-sidecar
+   ```
+   This writes `~/.gemini/config/sidecars/deaddrop/sidecar.json`.
+2. When Antigravity starts, its internal `SidecarManager` automatically starts Dead Drop's background exporter (`bin/sidecar.js`), providing it with the live credentials.
+3. The sidecar atomically writes `<mailbox>/.antigravity_session.json` (file permissions `0600`).
+4. When Claude Code (or any external caller) sends mail to Antigravity, Dead Drop reads `<mailbox>/.antigravity_session.json` and passes the active address and CSRF token to `agentapi`.
+
+#### Graceful Failure
+If `<mailbox>/.antigravity_session.json` is missing, unreadable, or stale (the sidecar PID is no longer running), Dead Drop skips the wake-up, logs an informative notice to stderr advising to run `npm run setup-sidecar`, and proceeds normally. As with all Dead Drop wake failures, the message file itself is always delivered safely.
+
+#### Known Limitations
+- **Multi-window Antigravity**: Dead Drop v1 assumes a single running Antigravity instance. In multi-window or multi-profile setups, the sidecar reflects the most recently active instance.
+
 ### Any other agent
 
 Run the server with `--agent=<name>` (or set `DEADDROP_AGENT=<name>`), pointed at a shared `DEADDROP_DIR`, and it can send and receive mail the same way.

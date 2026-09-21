@@ -4,9 +4,14 @@
   "description": "A tiny local MCP server that lets AI coding agents on one machine leave each other Markdown messages.",
   "main": "index.js",
   "scripts": {
-    "test": "node test/test-server.js"
+    "test": "node test/test-server.js",
+    "setup-sidecar": "node scripts/setup-sidecar.js"
   },
-  "keywords": ["mcp", "model-context-protocol", "agents"],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agents"
+  ],
   "author": "",
   "license": "MIT",
   "dependencies": {
