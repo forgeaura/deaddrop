@@ -19,7 +19,7 @@ import {
   isPidAlive,
   SESSION_FILENAME
 } from "../lib/messages.js";
-import { exportSession, cleanupSession, getSessionFilePath } from "../bin/sidecar.js";
+import { exportSession, cleanupSession, reconcileSession, getSessionFilePath } from "../bin/sidecar.js";
 import { setupSidecar } from "../scripts/setup-sidecar.js";
 import { startSettingsServer, loadConfig, saveConfig, DEFAULT_CONFIG } from "../lib/settings-server.js";
 
@@ -475,6 +475,161 @@ exit 0
     if (origLs) process.env.ANTIGRAVITY_LS_ADDRESS = origLs;
     if (origCsrf) process.env.ANTIGRAVITY_CSRF_TOKEN = origCsrf;
     console.log("✓ agentapi successfully received discovered ANTIGRAVITY_LS_ADDRESS and ANTIGRAVITY_CSRF_TOKEN");
+
+
+    // Test 7k: sidecar self-healing session lease, tie-break yield, and cleanupSession preservation
+    console.log("\n[Test 7k] sidecar self-healing lease, tie-break yield, and cleanupSession preservation...");
+    const origLs7k = process.env.ANTIGRAVITY_LS_ADDRESS;
+    const origCsrf7k = process.env.ANTIGRAVITY_CSRF_TOKEN;
+    delete process.env.ANTIGRAVITY_LS_ADDRESS;
+    delete process.env.ANTIGRAVITY_CSRF_TOKEN;
+
+    const leaseDir = path.join(testDir, "lease-test");
+    ensureDirectory(leaseDir);
+    const leaseFile = getSessionFilePath(leaseDir);
+
+    // 1. Self-healing from a dead PID
+    const deadPid = 99999999;
+    assert.ok(!isPidAlive(deadPid), "Test deadPid must not be alive");
+    fs.writeFileSync(leaseFile, JSON.stringify({
+      address: "localhost:11111",
+      csrf_token: "tok-dead",
+      pid: deadPid,
+      ppid: 100,
+      updated_at: "2026-01-01T00:00:00.000Z"
+    }, null, 2), { mode: 0o600 });
+
+    const beforeHeal = resolveAntigravitySession({ deaddropDir: leaseDir });
+    assert.equal(beforeHeal.valid, false);
+    assert.equal(beforeHeal.error, "stale");
+    assert.equal(beforeHeal.pid, deadPid);
+
+    // Reconcile as our live process
+    const healResult = reconcileSession({
+      address: "localhost:22222",
+      csrfToken: "tok-healed",
+      deaddropDir: leaseDir,
+      pid: process.pid,
+      ppid: process.ppid
+    });
+    assert.equal(healResult.action, "healed");
+    assert.equal(healResult.reason, "dead_pid");
+    assert.equal(healResult.previousPid, deadPid);
+    assert.equal(healResult.session.pid, process.pid);
+    assert.equal(healResult.session.address, "localhost:22222");
+    assert.equal(healResult.session.csrf_token, "tok-healed");
+
+    const afterHeal = resolveAntigravitySession({ deaddropDir: leaseDir });
+    assert.equal(afterHeal.valid, true);
+    assert.equal(afterHeal.address, "localhost:22222");
+    assert.equal(afterHeal.csrfToken, "tok-healed");
+
+    // Reconcile again when the file already matches our PID -> action: "none", no disk writes
+    const statBefore = fs.statSync(leaseFile);
+    const unchangedResult = reconcileSession({
+      address: "localhost:22222",
+      csrfToken: "tok-healed",
+      deaddropDir: leaseDir,
+      pid: process.pid,
+      ppid: process.ppid
+    });
+    assert.equal(unchangedResult.action, "none");
+    const statAfter = fs.statSync(leaseFile);
+    assert.equal(statBefore.mtimeMs, statAfter.mtimeMs, "Unchanged session file should not be rewritten");
+
+    // 2. Self-healing from corrupted file
+    fs.writeFileSync(leaseFile, "{ corrupt json !!", { mode: 0o600 });
+    const corruptHeal = reconcileSession({
+      address: "localhost:33333",
+      csrfToken: "tok-repaired",
+      deaddropDir: leaseDir,
+      pid: process.pid,
+      ppid: process.ppid
+    });
+    assert.equal(corruptHeal.action, "healed");
+    assert.equal(corruptHeal.reason, "corrupted");
+    const afterCorrupt = resolveAntigravitySession({ deaddropDir: leaseDir });
+    assert.equal(afterCorrupt.valid, true);
+    assert.equal(afterCorrupt.address, "localhost:33333");
+
+    // 3. Sibling collision: tie-break yield (do not overwrite when file points to live higher-PID sibling)
+    const higherSiblingPid = 88888888;
+    const lowerProcessPid = 77777777;
+    fs.writeFileSync(leaseFile, JSON.stringify({
+      address: "localhost:44444",
+      csrf_token: "tok-higher-sibling",
+      pid: higherSiblingPid,
+      ppid: 100,
+      updated_at: new Date().toISOString()
+    }, null, 2), { mode: 0o600 });
+
+    const yieldResult = reconcileSession({
+      address: "localhost:55555",
+      csrfToken: "tok-lower-process",
+      deaddropDir: leaseDir,
+      pid: lowerProcessPid,
+      ppid: 100,
+      isPidAliveFn: (p) => p === higherSiblingPid
+    });
+    assert.equal(yieldResult.action, "yield");
+    assert.equal(yieldResult.reason, "higher_pid_sibling");
+    assert.equal(yieldResult.higherPid, higherSiblingPid);
+
+    // Verify on-disk file was NOT overwritten
+    const onDiskAfterYield = JSON.parse(fs.readFileSync(leaseFile, "utf8"));
+    assert.equal(onDiskAfterYield.pid, higherSiblingPid);
+    assert.equal(onDiskAfterYield.csrf_token, "tok-higher-sibling");
+
+    // 4. Sibling collision: tie-break win (override older/lower-PID sibling)
+    const winResult = reconcileSession({
+      address: "localhost:66666",
+      csrfToken: "tok-winning-process",
+      deaddropDir: leaseDir,
+      pid: 99999990,
+      ppid: 100,
+      isPidAliveFn: (p) => p === higherSiblingPid
+    });
+    assert.equal(winResult.action, "healed");
+    assert.equal(winResult.reason, "won_tiebreak");
+    assert.equal(winResult.previousPid, higherSiblingPid);
+    const onDiskAfterWin = JSON.parse(fs.readFileSync(leaseFile, "utf8"));
+    assert.equal(onDiskAfterWin.pid, 99999990);
+    assert.equal(onDiskAfterWin.csrf_token, "tok-winning-process");
+
+    // 5. cleanupSession() does not delete a live sibling's session file
+    fs.writeFileSync(leaseFile, JSON.stringify({
+      address: "localhost:77777",
+      csrf_token: "tok-live-sibling",
+      pid: process.pid,
+      ppid: process.ppid
+    }, null, 2), { mode: 0o600 });
+
+    // Simulate an exiting older/other sibling process with a different PID
+    const otherPid = process.pid + 1;
+    const cleanedUpSibling = cleanupSession(leaseDir, otherPid, (p) => p === process.pid);
+    assert.equal(cleanedUpSibling, false, "cleanupSession should return false when file is owned by live sibling");
+    assert.ok(fs.existsSync(leaseFile), "cleanupSession must NOT delete file owned by a live sibling");
+    const preservedData = JSON.parse(fs.readFileSync(leaseFile, "utf8"));
+    assert.equal(preservedData.pid, process.pid);
+
+    // cleanupSession with matching PID does delete the file
+    const cleanedUpOwn = cleanupSession(leaseDir, process.pid);
+    assert.equal(cleanedUpOwn, true);
+    assert.ok(!fs.existsSync(leaseFile), "cleanupSession must delete file when PID matches");
+
+    // cleanupSession cleans up a dead PID if exiting
+    fs.writeFileSync(leaseFile, JSON.stringify({
+      address: "localhost:88888",
+      csrf_token: "tok-stale-exit",
+      pid: deadPid
+    }, null, 2), { mode: 0o600 });
+    const cleanedUpDead = cleanupSession(leaseDir, otherPid);
+    assert.equal(cleanedUpDead, true);
+    assert.ok(!fs.existsSync(leaseFile), "cleanupSession removes dead-PID file on exit");
+
+    if (origLs7k) process.env.ANTIGRAVITY_LS_ADDRESS = origLs7k;
+    if (origCsrf7k) process.env.ANTIGRAVITY_CSRF_TOKEN = origCsrf7k;
+    console.log("✓ sidecar self-healing lease, tie-break yield, and cleanupSession preservation passed");
 
 
     // Test 8: End-to-end Stdio MCP JSON-RPC protocol via MCP Client
