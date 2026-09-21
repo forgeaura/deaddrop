@@ -202,6 +202,15 @@ async function runTests() {
       }
     }), "utf8");
 
+    // Seed a valid mock session file so resolveAntigravitySession succeeds and allows
+    // wakeViaAgentapi to proceed to the exec layer even when running outside Antigravity.
+    const mockSessionPath = path.join(wakeTestDir, SESSION_FILENAME);
+    fs.writeFileSync(mockSessionPath, JSON.stringify({
+      address: "localhost:12345",
+      csrf_token: "mock-token",
+      pid: process.pid
+    }), { mode: 0o600 });
+
     const wakeAttempted = await wakeAgentIfTargeted({
       to: "antigravity",
       from: "claude",
@@ -214,6 +223,7 @@ async function runTests() {
     );
     assert.ok(!/wake_on_mail/.test(wakeAttempted.reason || ""));
     assert.ok(!/not configured/.test(wakeAttempted.reason || ""));
+    try { fs.unlinkSync(mockSessionPath); } catch {}
     console.log(`✓ Wake was attempted (not skipped for a config reason) when wake_on_mail is true`);
 
     // Test 7d: wake skipped (but message file still written) when wake_on_mail is false.

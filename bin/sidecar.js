@@ -5,8 +5,10 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { SESSION_FILENAME } from "../lib/messages.js";
+
 export const DEFAULT_DEADDROP_DIR = process.env.DEADDROP_DIR || path.join(os.homedir(), "deaddrop");
-export const SESSION_FILENAME = ".antigravity_session.json";
+export { SESSION_FILENAME };
 
 export function getSessionFilePath(dir = DEFAULT_DEADDROP_DIR) {
   return path.join(dir, SESSION_FILENAME);
