@@ -12,7 +12,7 @@ import {
   sendMessage,
   readMessages,
   markRead,
-  wakeAntigravityIfTargeted,
+  wakeAgentIfTargeted,
   getAgentapiExecutable,
   AUTHORITY_NOTICE
 } from "../lib/messages.js";
@@ -108,9 +108,9 @@ async function runTests() {
     assert.ok(claudeAllAfter[0].read_at !== null);
     console.log(`✓ markRead successfully marked message read`);
 
-    // Test 6: wakeAntigravityIfTargeted (Missing config file)
+    // Test 6: wakeAgentIfTargeted (Missing config file)
     console.log("\n[Test 6] Wake mechanism: missing .config.json...");
-    const wakeNoConfig = await wakeAntigravityIfTargeted({
+    const wakeNoConfig = await wakeAgentIfTargeted({
       to: "antigravity",
       from: "claude",
       filename: "test.md",
@@ -120,35 +120,129 @@ async function runTests() {
     assert.ok(wakeNoConfig.reason.includes("not found"));
     console.log(`✓ Correctly handled missing .config.json without error or new conversation`);
 
-    // Test 7: wakeAntigravityIfTargeted (Empty/invalid conversation ID)
-    console.log("\n[Test 7] Wake mechanism: empty conversation ID...");
-    const configPath = path.join(testDir, ".config.json");
-    fs.writeFileSync(configPath, JSON.stringify({ antigravity_conversation_id: "" }), "utf8");
+    // Wake-gating tests (7-7f) get their own subdirectory, since some of them call
+    // sendMessage and write real message files -- keeping those out of testDir avoids
+    // polluting the antigravity mailbox that Test 8 later asserts is empty.
+    const wakeTestDir = path.join(testDir, "wake-gating");
+    ensureDirectory(wakeTestDir);
+    const configPath = path.join(wakeTestDir, ".config.json");
 
-    const wakeEmptyId = await wakeAntigravityIfTargeted({
+    // Test 7: wakeAgentIfTargeted (Empty/invalid conversation ID, new per-agent shape)
+    console.log("\n[Test 7] Wake mechanism: empty conversation ID under new agents shape...");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        antigravity: { wake_on_mail: true, wake_method: "agentapi", conversation_id: "" }
+      }
+    }), "utf8");
+
+    const wakeEmptyId = await wakeAgentIfTargeted({
       to: "antigravity",
       from: "claude",
       filename: "test.md",
-      deaddropDir: testDir
+      deaddropDir: wakeTestDir
     });
     assert.equal(wakeEmptyId.woke, false);
-    assert.equal(wakeEmptyId.reason, "antigravity_conversation_id missing or empty");
+    assert.equal(wakeEmptyId.reason, "conversation_id missing or empty for agent 'antigravity'");
     console.log(`✓ Correctly handled empty conversation ID without creating conversation`);
 
     // Test 7b: getAgentapiExecutable precedence (env var > config file > default)
     console.log("\n[Test 7b] getAgentapiExecutable precedence...");
     delete process.env.DEADDROP_AGENTAPI_PATH;
     assert.equal(
-      getAgentapiExecutable({ config: { agentapi_path: "/custom/path/to/agentapi" } }),
+      getAgentapiExecutable({ config: { agents: { antigravity: { agentapi_path: "/custom/path/to/agentapi" } } } }),
       "/custom/path/to/agentapi"
     );
     process.env.DEADDROP_AGENTAPI_PATH = "/env/path/to/agentapi";
     assert.equal(
-      getAgentapiExecutable({ config: { agentapi_path: "/custom/path/to/agentapi" } }),
+      getAgentapiExecutable({ config: { agents: { antigravity: { agentapi_path: "/custom/path/to/agentapi" } } } }),
       "/env/path/to/agentapi"
     );
     delete process.env.DEADDROP_AGENTAPI_PATH;
     console.log("✓ getAgentapiExecutable prefers env var, then config, then default");
+
+    // Test 7c: wake attempted when wake_on_mail is true with a valid conversation_id.
+    // There's no real agentapi binary in the test environment, so the attempt itself
+    // will fail at the exec layer -- but that's the point: the failure reason should
+    // come from *trying* agentapi, not from being skipped for a config reason.
+    console.log("\n[Test 7c] Wake mechanism: wake attempted when wake_on_mail is true...");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        antigravity: { wake_on_mail: true, wake_method: "agentapi", conversation_id: "conv-abc-123" }
+      }
+    }), "utf8");
+
+    const wakeAttempted = await wakeAgentIfTargeted({
+      to: "antigravity",
+      from: "claude",
+      filename: "test.md",
+      deaddropDir: wakeTestDir
+    });
+    assert.ok(
+      wakeAttempted.woke === true || /agentapi/i.test(wakeAttempted.reason || ""),
+      `Expected a real wake attempt (success or agentapi-level failure), got: ${JSON.stringify(wakeAttempted)}`
+    );
+    assert.ok(!/wake_on_mail/.test(wakeAttempted.reason || ""));
+    assert.ok(!/not configured/.test(wakeAttempted.reason || ""));
+    console.log(`✓ Wake was attempted (not skipped for a config reason) when wake_on_mail is true`);
+
+    // Test 7d: wake skipped (but message file still written) when wake_on_mail is false.
+    console.log("\n[Test 7d] Wake mechanism: skipped when wake_on_mail is false...");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        antigravity: { wake_on_mail: false, wake_method: "agentapi", conversation_id: "conv-abc-123" }
+      }
+    }), "utf8");
+
+    const msgWakeOff = await sendMessage({
+      to: "antigravity",
+      subject: "Should not wake",
+      body: "wake_on_mail is false for this agent.",
+      from: "claude",
+      deaddropDir: wakeTestDir
+    });
+    assert.ok(fs.existsSync(msgWakeOff.filePath), "Message file should still be written when wake is skipped");
+    assert.equal(msgWakeOff.wakeResult.woke, false);
+    assert.match(msgWakeOff.wakeResult.reason, /wake_on_mail is false or unset for agent 'antigravity'/);
+    console.log(`✓ Message written and wake correctly skipped with reason logged`);
+
+    // Test 7e: wake skipped when the target agent isn't present in `agents` at all.
+    console.log("\n[Test 7e] Wake mechanism: skipped when agent absent from agents map...");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        antigravity: { wake_on_mail: true, wake_method: "agentapi", conversation_id: "conv-abc-123" }
+      }
+    }), "utf8");
+
+    const msgUnknownAgent = await sendMessage({
+      to: "sarah",
+      subject: "No agents entry",
+      body: "sarah has no entry in the agents map.",
+      from: "claude",
+      deaddropDir: wakeTestDir
+    });
+    assert.ok(fs.existsSync(msgUnknownAgent.filePath), "Message file should still be written for an unconfigured agent");
+    assert.equal(msgUnknownAgent.wakeResult.woke, false);
+    assert.match(msgUnknownAgent.wakeResult.reason, /not configured in agents map/);
+    console.log(`✓ Message written and wake correctly skipped for an agent absent from the agents map`);
+
+    // Test 7f: wake skipped when wake_method is "unsupported" (e.g. Claude Code today),
+    // even if wake_on_mail were somehow true -- there is no external wake mechanism for it.
+    console.log("\n[Test 7f] Wake mechanism: skipped for wake_method 'unsupported'...");
+    fs.writeFileSync(configPath, JSON.stringify({
+      agents: {
+        claude: { wake_on_mail: true, wake_method: "unsupported" }
+      }
+    }), "utf8");
+
+    const wakeUnsupported = await wakeAgentIfTargeted({
+      to: "claude",
+      from: "antigravity",
+      filename: "test.md",
+      deaddropDir: wakeTestDir
+    });
+    assert.equal(wakeUnsupported.woke, false);
+    assert.match(wakeUnsupported.reason, /not a supported external wake method/);
+    console.log(`✓ Correctly declined to wake an agent with wake_method 'unsupported'`);
 
     // Test 8: End-to-end Stdio MCP JSON-RPC protocol via MCP Client
     console.log("\n[Test 8] End-to-end Stdio MCP Client interaction...");
