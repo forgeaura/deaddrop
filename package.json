@@ -17,5 +17,8 @@
   "type": "module",
   "bin": {
     "deaddrop": "./index.js"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }
