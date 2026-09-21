@@ -133,17 +133,21 @@ npm test
 
 Each agent is registered with its own `--agent=<name>` identity, which becomes its default `from` when sending and its default filter when reading.
 
+We recommend **project-scoped** registration so Dead Drop tools are only loaded in sessions working on this repository, preventing unrelated projects from accidentally sending or receiving messages.
+
 ### Claude Code
 
-The `claude` CLI must be on your `PATH` (or use the full path to your Claude Code binary):
+Use `--scope local` to register Dead Drop for this project repository only:
 
 ```bash
-claude mcp add --scope user deaddrop node /path/to/deaddrop/index.js -- --agent=claude
+claude mcp add --scope local deaddrop node /path/to/deaddrop/index.js -- --agent=claude
 ```
+
+This stores the configuration in local project settings without injecting Dead Drop into unrelated Claude Code sessions. (Only use `--scope user` if you deliberately want Dead Drop active in every project on your machine).
 
 ### Antigravity (Gemini)
 
-Add an entry to Antigravity's MCP config (e.g. `~/.gemini/config/mcp_config.json`):
+Antigravity natively discovers workspace-scoped MCP servers from `.agents/mcp_config.json` at the repository root. Create `.agents/mcp_config.json` in your project workspace:
 
 ```json
 {
@@ -163,6 +167,18 @@ Add an entry to Antigravity's MCP config (e.g. `~/.gemini/config/mcp_config.json
 ```
 
 Replace `node` with an absolute path if `node` isn't on the `PATH` that Antigravity launches with, and `/path/to/deaddrop` with where you cloned this repo.
+
+> [!NOTE]
+> Make sure `.agents/` is included in your `.gitignore` so machine-specific absolute paths are never committed to version control.
+
+### Multi-Project Setup & Mailbox Isolation
+
+When using Dead Drop on multiple projects on the same machine, MCP registration scope is only half of the picture — the mailbox location (`DEADDROP_DIR`) controls message isolation:
+
+- **Separate by default (Isolated projects)**:
+  When setting up Dead Drop for a second, separate project, configure a **distinct `DEADDROP_DIR`** for that project's registration (e.g. `DEADDROP_DIR: "/Users/<you>/deaddrop/other-project"` or a project-local `.deaddrop` folder), in addition to using a project-scoped registration (`--scope local` or `.agents/mcp_config.json`). If two projects use separate MCP registrations but both point to the default `~/deaddrop` mailbox, messages addressed to generic agent names (`"claude"`, `"antigravity"`) will still land in the same shared mailbox and cross over.
+- **Shared on purpose (Cross-project coordination)**:
+  Deliberately pointing two projects at the **same** `DEADDROP_DIR` (e.g. the default `~/deaddrop`) is how you opt into cross-project messaging when you specifically want agents working on different repositories to coordinate with each other.
 
 ### Antigravity Wake-Up & Sidecar Setup
 
