@@ -22,6 +22,7 @@ import {
 import { exportSession, cleanupSession, reconcileSession, getSessionFilePath } from "../bin/sidecar.js";
 import { setupSidecar } from "../scripts/setup-sidecar.js";
 import { startSettingsServer, loadConfig, saveConfig, DEFAULT_CONFIG } from "../lib/settings-server.js";
+import { runClaudeCliTests } from "./test-claude-cli.js";
 
 async function runTests() {
   console.log("=== Starting Dead Drop Test Suite ===");
@@ -649,6 +650,7 @@ exit 0
     assert.ok(toolNames.includes("send_message"));
     assert.ok(toolNames.includes("read_messages"));
     assert.ok(toolNames.includes("mark_read"));
+    assert.ok(toolNames.includes("start_session"));
     console.log(`✓ MCP tools available: ${toolNames.join(", ")}`);
 
     // Call send_message
@@ -888,6 +890,9 @@ exit 0
       await closeSettingsServer();
       console.log("✓ Settings server closed cleanly");
     }
+
+    // Test 10: Claude CLI & start_session MCP Tool
+    await runClaudeCliTests(testDir);
 
     console.log("\n=== ALL TESTS PASSED SUCCESSFULLY ===");
   } finally {
