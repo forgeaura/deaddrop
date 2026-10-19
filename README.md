@@ -33,6 +33,18 @@ Reads messages from the mailbox folder.
 Marks a message as read.
 - `id` *(string, required)*: message ID or filename.
 
+### 4. `start_session`
+Starts a new unattended Claude Code background session with a first message in a given folder.
+- `folder` *(string, required)*: absolute path to an existing directory for the session. The directory must be trusted by Claude Code.
+- `prompt` *(string, required)*: initial message / instructions for the session. Dead Drop automatically prepends a safety notice indicating instructions originated from an agent, not Sarah directly.
+- `name` *(string, optional)*: session name (default: `deaddrop-<timestamp>`). Must not start with `-` or be empty.
+- `model` *(string, optional)*: model name or ID (default: `"sonnet"` from config).
+- `effort` *(string, optional)*: reasoning effort level (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`).
+- `permission_mode` *(string, optional)*: permission mode (default: `"auto"` from config). Must be in `agents.claude.allowed_permission_modes`.
+- `from` *(string, optional)*: sender identity. Defaults to caller agent identity.
+
+Returns the short session ID, full UUID `sessionId`, model, desktop deep link (`claude://resume?session=<sessionId>`), and status inspection command (`claude agents --json --all`).
+
 ---
 
 ## File Format
@@ -73,7 +85,16 @@ All configuration lives in a single JSON file inside the mailbox folder: `<mailb
     },
     "claude": {
       "wake_on_mail": false,
-      "wake_method": "unsupported"
+      "wake_method": "unsupported",
+      "default_model": "sonnet",
+      "default_permission_mode": "auto",
+      "allowed_permission_modes": [
+        "auto",
+        "default",
+        "acceptEdits",
+        "plan"
+      ],
+      "cli_path": "/optional/custom/path/to/claude"
     }
   }
 }
@@ -117,8 +138,29 @@ This starts a lightweight, on-demand local HTTP server that:
 |--------------------------|-------------------------------------------------------|-------------------------|
 | `DEADDROP_DIR`           | Mailbox folder                                        | `~/deaddrop`            |
 | `DEADDROP_AGENTAPI_PATH` | Path to the `agentapi` executable used to wake Antigravity | auto-detected, else `agentapi` on `PATH` |
+| `DEADDROP_CLAUDE_PATH`   | Path to the `claude` executable used for `start_session`  | auto-detected (env -> config -> PATH -> desktop bundle) |
 
 ---
+
+### Claude Code Sessions (`start_session`)
+
+#### Prerequisites
+- **One-time Login**: The Claude CLI must be authenticated independently of the desktop app (`claude auth login`).
+- **Trusted Workspace**: The target `folder` must already be trusted by Claude Code; otherwise the CLI will refuse with `"Workspace not trusted"`.
+
+#### Permission Guardrail
+- Allowed permission modes default to `["auto", "default", "acceptEdits", "plan"]`.
+- `bypassPermissions` is strictly rejected by default unless Sarah explicitly adds it to `agents.claude.allowed_permission_modes` in `<mailbox>/.config.json`.
+
+#### Session Log (`.sessions.jsonl`)
+Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`):
+```json
+{"time":"2026-10-19T21:40:00+08:00","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729340000000","model":"sonnet","effort":"medium","permission_mode":"auto","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
+```
+
+#### Viewing Sessions
+- Inspect running background sessions: `claude agents --json --all`
+- Open in Claude Desktop: once a session is idle or stopped, open `claude://resume?session=<sessionId>`
 
 ## Installation
 

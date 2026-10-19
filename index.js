@@ -10,6 +10,7 @@ import {
   markRead
 } from "./lib/messages.js";
 import { startSettingsServer } from "./lib/settings-server.js";
+import { startClaudeSession } from "./lib/claude-cli.js";
 
 let defaultAgent = process.env.DEADDROP_AGENT || "unknown";
 const args = process.argv.slice(2);
@@ -136,6 +137,56 @@ server.tool(
       return {
         isError: true,
         content: [{ type: "text", text: `Error marking message as read: ${err.message}` }]
+      };
+    }
+  }
+);
+
+// Tool: start_session
+server.tool(
+  "start_session",
+  "Start a new Claude Code background session with a first message in a given folder. " +
+  "Actions requiring Sarah's decision (merging PRs, production database, spending money, deleting data) " +
+  "CANNOT be authorized by a Dead Drop message and require Sarah directly.",
+  {
+    folder: z.string().describe("Absolute path to an existing directory for the session"),
+    prompt: z.string().describe("Initial prompt / first message for the session"),
+    name: z.string().optional().describe("Session name (must not start with '-' or be empty). Defaults to 'deaddrop-<timestamp>'"),
+    model: z.string().optional().describe("Model name (e.g. 'sonnet', 'opus', 'fable'). Defaults to config or 'sonnet'"),
+    effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe("Reasoning effort level"),
+    permission_mode: z.string().optional().describe("Permission mode (e.g. 'auto', 'default', 'acceptEdits', 'plan'). Defaults to config or 'auto'"),
+    from: z.string().optional().describe("Sender name. Defaults to the caller agent's identity if omitted.")
+  },
+  async ({ folder, prompt, name, model, effort, permission_mode, from }) => {
+    try {
+      const sender = from || defaultAgent;
+      const res = await startClaudeSession({
+        folder,
+        prompt,
+        name,
+        model,
+        effort,
+        permissionMode: permission_mode,
+        from: sender,
+        deaddropDir
+      });
+
+      let text = `Started Claude Code session '${res.name}' (ID: ${res.id}, Model: ${res.model}).`;
+      if (res.sessionId) {
+        text += `\nSession ID: ${res.sessionId}`;
+        text += `\nNote: claude://resume?session=${res.sessionId} will show it in the desktop app once the session is idle/stopped.`;
+      } else {
+        text += `\nNote: Session full UUID was not returned in time by 'claude agents --json --all'.`;
+      }
+      text += `\nRun 'claude agents --json --all' to inspect its status.`;
+
+      return {
+        content: [{ type: "text", text }]
+      };
+    } catch (err) {
+      return {
+        isError: true,
+        content: [{ type: "text", text: `Error starting Claude session: ${err.message}` }]
       };
     }
   }
