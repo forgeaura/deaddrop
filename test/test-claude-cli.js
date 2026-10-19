@@ -247,7 +247,6 @@ export async function runClaudeCliTests(testDir) {
     claudeExec: "/fake/claude",
     cwd: claudeTestDir,
     shortId: "e4f5a6b7",
-    name: "my-session",
     maxRetries: 5,
     retryDelayMs: 10,
     execFileFn: mockLookupExec,
@@ -267,6 +266,25 @@ export async function runClaudeCliTests(testDir) {
     sleepFn: async () => {}
   });
   assert.equal(exhaustedLookup, null, "lookupSessionId should return null when exhausted");
+
+  // Must match on short id only: ignore older session with same name listed first
+  console.log("  Testing lookupSessionId matches on short id only (ignores duplicate name listed first)...");
+  const mockDuplicateNameExec = (file, args, opts, cb) => {
+    cb(null, JSON.stringify([
+      { id: "old11111", sessionId: "uuid-old-wrong-session", name: "worker" },
+      { id: "new22222", sessionId: "uuid-new-correct-session", name: "worker" }
+    ]), "");
+  };
+
+  const matchedById = await lookupSessionId({
+    claudeExec: "/fake/claude",
+    cwd: claudeTestDir,
+    shortId: "new22222",
+    maxRetries: 1,
+    execFileFn: mockDuplicateNameExec,
+    sleepFn: async () => {}
+  });
+  assert.equal(matchedById, "uuid-new-correct-session", "Must match on short id and not hit older session with same name");
 
   // 10i: CLI error formatting and diagnosability (Issue #18 lesson)
   console.log("  Testing CLI error formatting and diagnosability...");
