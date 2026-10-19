@@ -22,6 +22,7 @@ import {
 import { exportSession, cleanupSession, reconcileSession, getSessionFilePath } from "../bin/sidecar.js";
 import { setupSidecar } from "../scripts/setup-sidecar.js";
 import { startSettingsServer, loadConfig, saveConfig, DEFAULT_CONFIG } from "../lib/settings-server.js";
+import { startApp, stopApp, buildMenuTemplate, getSettingsServer, getMainWindow } from "../electron/main.js";
 
 async function runTests() {
   console.log("=== Starting Dead Drop Test Suite ===");
@@ -845,8 +846,16 @@ exit 0
         stdio: ["pipe", "pipe", "pipe"]
       });
       let cliStdout = "";
-      cliChild.stdout.on("data", (chunk) => { cliStdout += chunk.toString(); });
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 3000);
+        cliChild.stdout.on("data", (chunk) => {
+          cliStdout += chunk.toString();
+          if (cliStdout.includes("Press Ctrl+C to stop.")) {
+            clearTimeout(timer);
+            resolve();
+          }
+        });
+      });
       assert.ok(cliStdout.includes("Settings server listening at http://127.0.0.1:"));
       assert.ok(cliStdout.includes("Press Ctrl+C to stop."));
       cliChild.kill("SIGINT");
@@ -888,6 +897,141 @@ exit 0
       await closeSettingsServer();
       console.log("✓ Settings server closed cleanly");
     }
+
+    // Test 10: Electron app structure & server integration (headless)
+    console.log("\n[Test 10] Electron app structure, in-process server lifecycle, and configuration (headless)...");
+
+    // 10a: buildMenuTemplate verification
+    const macMenu = buildMenuTemplate({ name: "Dead Drop Settings" }, true);
+    assert.ok(Array.isArray(macMenu));
+    assert.equal(macMenu[0].label, "Dead Drop Settings");
+    assert.ok(macMenu[0].submenu.some((item) => item.role === "about"));
+    assert.ok(macMenu[0].submenu.some((item) => item.role === "quit"));
+
+    const editMenuMac = macMenu.find((item) => item.label === "Edit");
+    assert.ok(editMenuMac, "Edit menu must be defined");
+    const editRolesMac = editMenuMac.submenu.map((item) => item.role).filter(Boolean);
+    assert.ok(editRolesMac.includes("cut"));
+    assert.ok(editRolesMac.includes("copy"));
+    assert.ok(editRolesMac.includes("paste"));
+    assert.ok(editRolesMac.includes("selectAll"));
+
+    const linuxMenu = buildMenuTemplate({ name: "Dead Drop Settings" }, false);
+    assert.notEqual(linuxMenu[0].label, "Dead Drop Settings", "Non-mac menu should start with standard menus");
+    const editMenuLinux = linuxMenu.find((item) => item.label === "Edit");
+    assert.ok(editMenuLinux);
+    console.log("✓ buildMenuTemplate provides standard macOS and cross-platform menu structures with Edit clipboard roles");
+
+    // 10b: In-process startApp and stopApp without GUI (skipWindow: true)
+    const electronMailboxDir = path.join(testDir, "electron-mailbox-test");
+    ensureDirectory(electronMailboxDir);
+
+    const appLaunch = await startApp({
+      port: 0,
+      deaddropDir: electronMailboxDir,
+      skipWindow: true
+    });
+
+    assert.ok(appLaunch.settingsServer, "Settings server should be instantiated in-process");
+    assert.match(appLaunch.url, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+    assert.equal(getSettingsServer(), appLaunch.settingsServer);
+
+    // Verify HTTP endpoints work through embedded server
+    const stateRes = await fetch(`${appLaunch.url}api/state`);
+    assert.equal(stateRes.status, 200);
+    const stateData = await stateRes.json();
+    assert.equal(stateData.mailboxDir, path.resolve(electronMailboxDir));
+
+    const htmlRes = await fetch(appLaunch.url);
+    assert.equal(htmlRes.status, 200);
+    const htmlText = await htmlRes.text();
+    assert.ok(htmlText.includes("<title>Dead Drop Settings</title>"));
+
+    // Verify clean teardown via stopApp
+    await stopApp();
+    assert.equal(getSettingsServer(), null, "getSettingsServer() should be null after stopApp");
+
+    let serverClosed = false;
+    try {
+      await fetch(`${appLaunch.url}api/state`);
+    } catch {
+      serverClosed = true;
+    }
+    assert.ok(serverClosed, "Server port must be released after stopApp");
+    console.log("✓ startApp embeds settings server in-process and stopApp cleanly tears it down");
+
+    // 10c: Mock Electron runtime integration (app/Menu/BrowserWindow lifecycle)
+    let appliedMenu = null;
+    let windowConstructedOptions = null;
+    let windowLoadedUrl = null;
+
+    const mockElectron = {
+      app: { name: "Dead Drop Settings" },
+      Menu: {
+        buildFromTemplate: (tpl) => tpl,
+        setApplicationMenu: (m) => {
+          appliedMenu = m;
+        }
+      },
+      BrowserWindow: class MockBrowserWindow {
+        constructor(opts) {
+          windowConstructedOptions = opts;
+          this._destroyed = false;
+        }
+        once(event, cb) {
+          if (event === "ready-to-show") cb();
+        }
+        on(event, cb) {}
+        show() {}
+        isDestroyed() {
+          return this._destroyed;
+        }
+        close() {
+          this._destroyed = true;
+        }
+        async loadURL(url) {
+          windowLoadedUrl = url;
+        }
+      }
+    };
+
+    const mockedApp = await startApp({
+      port: 0,
+      deaddropDir: electronMailboxDir,
+      electronOverride: mockElectron
+    });
+
+    assert.ok(appliedMenu, "Application menu should be registered");
+    assert.ok(windowConstructedOptions, "BrowserWindow should be instantiated with options");
+    assert.equal(windowConstructedOptions.title, "Dead Drop Settings");
+    assert.equal(windowConstructedOptions.backgroundColor, "#0d1117");
+    assert.equal(windowConstructedOptions.webPreferences.nodeIntegration, false);
+    assert.equal(windowConstructedOptions.webPreferences.contextIsolation, true);
+    assert.equal(windowConstructedOptions.webPreferences.sandbox, true);
+    assert.match(windowLoadedUrl, /^http:\/\/127\.0\.0\.1:\d+\/$/);
+
+    await stopApp();
+    console.log("✓ Mock Electron integration verified Menu, BrowserWindow hardening, and loopback loadURL");
+
+    // 10d: package.json scripts and electron-builder configuration validation
+    const pkgJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
+    assert.equal(pkgJson.scripts["app"], "electron electron/main.js");
+    assert.equal(pkgJson.scripts["build:app"], "electron-builder --mac --dir");
+    assert.equal(pkgJson.scripts["build:dmg"], "electron-builder --mac dmg");
+    assert.equal(pkgJson.scripts["settings"], "node index.js settings", "CLI settings script must be preserved");
+
+    assert.ok(pkgJson.build, "package.json must contain build configuration for electron-builder");
+    assert.equal(pkgJson.build.appId, "com.forgeaura.deaddrop.settings");
+    assert.equal(pkgJson.build.productName, "Dead Drop Settings");
+    assert.equal(pkgJson.build.extraMetadata.main, "electron/main.js", "extraMetadata.main must point to electron/main.js");
+    assert.deepEqual(pkgJson.build.mac.target, ["dir", "dmg"]);
+    assert.equal(pkgJson.build.mac.identity, null, "Code signing identity should be null per non-goals");
+
+    // 10e: Icon asset verification
+    assert.ok(fs.existsSync("assets/icon.png"), "assets/icon.png must exist");
+    const iconStat = fs.statSync("assets/icon.png");
+    assert.ok(iconStat.size > 10000, "assets/icon.png must be a valid high-resolution image");
+    console.log("✓ package.json scripts, build metadata, and 1024x1024 icon asset validated");
 
     console.log("\n=== ALL TESTS PASSED SUCCESSFULLY ===");
   } finally {

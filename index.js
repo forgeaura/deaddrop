@@ -142,6 +142,11 @@ server.tool(
 );
 
 async function main() {
+  if (process.versions.electron) {
+    await import("./electron/main.js");
+    return;
+  }
+
   if (args.includes("settings") || args[0] === "settings") {
     let port = 3344;
     for (let i = 0; i < args.length; i++) {

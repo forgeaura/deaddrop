@@ -6,7 +6,10 @@
   "scripts": {
     "test": "node test/test-server.js",
     "setup-sidecar": "node scripts/setup-sidecar.js",
-    "settings": "node index.js settings"
+    "settings": "node index.js settings",
+    "app": "electron electron/main.js",
+    "build:app": "electron-builder --mac --dir",
+    "build:dmg": "electron-builder --mac dmg"
   },
   "keywords": [
     "mcp",
@@ -26,5 +29,31 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "electron": "^44.4.3",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.forgeaura.deaddrop.settings",
+    "productName": "Dead Drop Settings",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "target": [
+        "dir",
+        "dmg"
+      ],
+      "identity": null,
+      "icon": "assets/icon.png"
+    },
+    "files": [
+      "electron/**/*",
+      "lib/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.js"
+    }
   }
 }
