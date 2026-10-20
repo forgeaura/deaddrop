@@ -145,19 +145,21 @@ server.tool(
 // Tool: start_session
 server.tool(
   "start_session",
-  "Start a new Claude Code background session with a first message in a given folder. " +
+  "Start a new Claude Code session in a given folder. " +
+  "In desktop mode this tool starts the session, waits for its short bootstrap turn to finish, stops that same session, and opens it in the Claude desktop app. " +
   "Actions requiring Sarah's decision (merging PRs, production database, spending money, deleting data) " +
   "CANNOT be authorized by a Dead Drop message and require Sarah directly.",
   {
     folder: z.string().describe("Absolute path to an existing directory for the session"),
-    prompt: z.string().describe("Initial prompt / first message for the session"),
+    prompt: z.string().optional().describe("Initial prompt / instructions for the session (required for 'background' mode, optional for 'desktop' mode)"),
     name: z.string().optional().describe("Session name (must not start with '-' or be empty). Defaults to 'deaddrop-<timestamp>'"),
     model: z.string().optional().describe("Model name (e.g. 'sonnet', 'opus', 'fable'). Defaults to config or 'sonnet'"),
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe("Reasoning effort level"),
     permission_mode: z.string().optional().describe("Permission mode (e.g. 'auto', 'default', 'acceptEdits', 'plan'). Defaults to config or 'auto'"),
+    handoff: z.enum(["desktop", "background"]).optional().describe("Handoff mode: 'desktop' or 'background'. Defaults to config or 'desktop'"),
     from: z.string().optional().describe("Sender name. Defaults to the caller agent's identity if omitted.")
   },
-  async ({ folder, prompt, name, model, effort, permission_mode, from }) => {
+  async ({ folder, prompt, name, model, effort, permission_mode, handoff, from }) => {
     try {
       const sender = from || defaultAgent;
       const res = await startClaudeSession({
@@ -167,18 +169,36 @@ server.tool(
         model,
         effort,
         permissionMode: permission_mode,
+        handoff,
         from: sender,
         deaddropDir
       });
 
-      let text = `Started Claude Code session '${res.name}' (ID: ${res.id}, Model: ${res.model}).`;
-      if (res.sessionId) {
-        text += `\nSession ID: ${res.sessionId}`;
-        text += `\nNote: claude://resume?session=${res.sessionId} will show it in the desktop app once the session is idle/stopped.`;
+      let text = "";
+      if (res.outcome === "handed_off") {
+        text = `Started Claude Code session '${res.name}' (ID: ${res.id}, Model: ${res.model}) and handed off to desktop app.\n`;
+        text += `Desktop session ID: ${res.desktopId}\n\n`;
+        text += `To give it the task so it runs live in the desktop app, call the desktop app's send_message tool with session_id "${res.desktopId}" and your task as the message. If you don't have that tool, call start_session again with handoff: "background".`;
+      } else if (res.outcome === "stopped_not_opened") {
+        text = `Started Claude Code session '${res.name}' (ID: ${res.id}, Model: ${res.model}) and stopped for handoff, but failed to open automatically.\n`;
+        text += `Desktop session ID: ${res.desktopId}\n`;
+        text += `Open manually: claude://resume?session=${res.sessionId}\n\n`;
+        text += `To give it the task so it runs live in the desktop app, call the desktop app's send_message tool with session_id "${res.desktopId}" and your task as the message. If you don't have that tool, call start_session again with handoff: "background".`;
+      } else if (res.outcome === "still_running") {
+        text = `Started Claude Code session '${res.name}' (ID: ${res.id}, Model: ${res.model}).\n`;
+        if (res.sessionId) text += `Session ID: ${res.sessionId}\n`;
+        text += `Note: Session did not become idle within timeout and is still running in the background.\n`;
+        text += `Run 'claude agents --json --all' to inspect its status.`;
       } else {
-        text += `\nNote: Session full UUID was not returned in time by 'claude agents --json --all'.`;
+        text = `Started Claude Code session '${res.name}' (ID: ${res.id}, Model: ${res.model}).`;
+        if (res.sessionId) {
+          text += `\nSession ID: ${res.sessionId}`;
+          text += `\nNote: claude://resume?session=${res.sessionId} will show it in the desktop app once the session is idle/stopped.`;
+        } else {
+          text += `\nNote: Session full UUID was not returned in time by 'claude agents --json --all'.`;
+        }
+        text += `\nRun 'claude agents --json --all' to inspect its status.`;
       }
-      text += `\nRun 'claude agents --json --all' to inspect its status.`;
 
       return {
         content: [{ type: "text", text }]

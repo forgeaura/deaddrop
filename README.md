@@ -34,16 +34,18 @@ Marks a message as read.
 - `id` *(string, required)*: message ID or filename.
 
 ### 4. `start_session`
-Starts a new unattended Claude Code background session with a first message in a given folder.
+Starts a new Claude Code session in a given folder.
+In desktop mode this tool starts the session, waits for its short bootstrap turn to finish, stops that same session, and opens it in the Claude desktop app.
 - `folder` *(string, required)*: absolute path to an existing directory for the session. The directory must be trusted by Claude Code.
-- `prompt` *(string, required)*: initial message / instructions for the session. Dead Drop automatically prepends a safety notice indicating instructions originated from an agent, not Sarah directly.
+- `prompt` *(string, optional)*: initial message / instructions for the session (required for `"background"` mode; optional context for `"desktop"` mode). Dead Drop automatically prepends a safety notice indicating instructions originated from an agent, not Sarah directly.
 - `name` *(string, optional)*: session name (default: `deaddrop-<timestamp>`). Must not start with `-` or be empty.
 - `model` *(string, optional)*: model name or ID (default: `"sonnet"` from config).
 - `effort` *(string, optional)*: reasoning effort level (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`).
 - `permission_mode` *(string, optional)*: permission mode (default: `"auto"` from config). Must be in `agents.claude.allowed_permission_modes`.
+- `handoff` *(string, optional, `"desktop"` | `"background"`)*: handoff mode (default: `"desktop"` from config).
 - `from` *(string, optional)*: sender identity. Defaults to caller agent identity.
 
-Returns the short session ID, full UUID `sessionId`, model, desktop deep link (`claude://resume?session=<sessionId>`), and status inspection command (`claude agents --json --all`).
+Returns desktop session ID (`local_<sessionId>`) and instructions for delegating the task via the desktop app's `send_message` tool, or background session details if `handoff: "background"`.
 
 ---
 
@@ -94,6 +96,7 @@ All configuration lives in a single JSON file inside the mailbox folder: `<mailb
         "acceptEdits",
         "plan"
       ],
+      "default_handoff": "desktop",
       "cli_path": "/optional/custom/path/to/claude"
     }
   }
@@ -144,6 +147,10 @@ This starts a lightweight, on-demand local HTTP server that:
 
 ### Claude Code Sessions (`start_session`)
 
+#### Handoff Modes
+- **`"desktop"` (default)**: Starts a session in the background with a minimal bootstrap prompt, waits for it to become idle, stops it with `claude stop <id>`, and opens it in the Claude desktop app via `claude://resume?session=<sessionId>` (macOS only). The desktop app adopts it as `local_<sessionId>`. To run the actual task live in the desktop app, the caller (which must be a desktop Claude Code session) calls its desktop `send_message` tool with `session_id: "local_<sessionId>"`. If the caller does not have desktop session tools, it should use `handoff: "background"`.
+- **`"background"`**: Starts a standard background CLI session that executes unattended until completion. `prompt` is required.
+
 #### Prerequisites
 - **One-time Login**: The Claude CLI must be authenticated independently of the desktop app (`claude auth login`).
 - **Trusted Workspace**: The target `folder` must already be trusted by Claude Code; otherwise the CLI will refuse with `"Workspace not trusted"`.
@@ -153,9 +160,9 @@ This starts a lightweight, on-demand local HTTP server that:
 - `bypassPermissions` is strictly rejected by default unless Sarah explicitly adds it to `agents.claude.allowed_permission_modes` in `<mailbox>/.config.json`.
 
 #### Session Log (`.sessions.jsonl`)
-Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`):
+Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`), tracking `handoff` and `outcome` (`handed_off`, `still_running`, or `background`):
 ```json
-{"time":"2026-10-19T21:40:00+08:00","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729340000000","model":"sonnet","effort":"medium","permission_mode":"auto","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
+{"time":"2026-10-20T12:00:00+08:00","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729468000000","model":"sonnet","effort":"medium","permission_mode":"auto","handoff":"desktop","outcome":"handed_off","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
 ```
 
 #### Viewing Sessions

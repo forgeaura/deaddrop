@@ -10,6 +10,8 @@ import {
   compareSemver,
   stripAnsi,
   buildPromptWithPreamble,
+  buildDesktopBootstrapPrompt,
+  waitForSessionIdle,
   buildClaudeArgs,
   parseShortId,
   lookupSessionId,
@@ -17,7 +19,8 @@ import {
   startClaudeSession,
   formatExecError,
   DEFAULT_CLAUDE_ALLOWED_MODES,
-  VALID_EFFORT_LEVELS
+  VALID_EFFORT_LEVELS,
+  VALID_HANDOFF_MODES
 } from "../lib/claude-cli.js";
 
 export async function runClaudeCliTests(testDir) {
@@ -90,13 +93,25 @@ export async function runClaudeCliTests(testDir) {
     /Claude Code CLI executable not found/
   );
 
-  // 10c: buildPromptWithPreamble & buildClaudeArgs
-  console.log("  Testing buildPromptWithPreamble and buildClaudeArgs...");
+  // 10c: buildPromptWithPreamble, buildDesktopBootstrapPrompt & buildClaudeArgs
+  console.log("  Testing buildPromptWithPreamble, buildDesktopBootstrapPrompt, and buildClaudeArgs...");
   const promptText = "Please write a test";
   const fullPrompt = buildPromptWithPreamble({ prompt: promptText, from: "juno" });
   assert.ok(fullPrompt.includes("[Started via Dead Drop by juno."));
   assert.ok(fullPrompt.includes("Actions requiring Sarah's decision"));
   assert.ok(fullPrompt.endsWith(promptText));
+
+  // Bootstrap prompt without caller prompt
+  const bootstrapNoPrompt = buildDesktopBootstrapPrompt({ from: "juno" });
+  assert.ok(bootstrapNoPrompt.includes("[Started via Dead Drop by juno."));
+  assert.ok(bootstrapNoPrompt.includes("You were created by juno via Dead Drop. Your task will arrive as the next message. Reply with one line: READY. Use no tools."));
+  assert.ok(!bootstrapNoPrompt.includes("Context (do not act on it yet):"));
+
+  // Bootstrap prompt with caller prompt context
+  const bootstrapWithPrompt = buildDesktopBootstrapPrompt({ prompt: "Refactor database queries", from: "juno" });
+  assert.ok(bootstrapWithPrompt.includes("[Started via Dead Drop by juno."));
+  assert.ok(bootstrapWithPrompt.includes("You were created by juno via Dead Drop. Your task will arrive as the next message. Reply with one line: READY. Use no tools."));
+  assert.ok(bootstrapWithPrompt.includes("Context (do not act on it yet):\nRefactor database queries"));
 
   const cliArgs = buildClaudeArgs({
     name: "test-sess",
@@ -135,6 +150,10 @@ export async function runClaudeCliTests(testDir) {
   await assert.rejects(
     async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", effort: "extreme" }),
     /Invalid effort 'extreme'/
+  );
+  await assert.rejects(
+    async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", handoff: "invalid_mode" }),
+    /Invalid handoff mode 'invalid_mode'/
   );
 
   // 10e: Folder validation in startClaudeSession (lives in library)
@@ -182,10 +201,14 @@ export async function runClaudeCliTests(testDir) {
   let mockExecCalled = false;
   const mockExecFileSuccess = (file, args, opts, cb) => {
     mockExecCalled = true;
-    assert.equal(opts.cwd, claudeTestDir);
-    assert.equal(opts.timeout, 60000);
-    assert.equal(opts.maxBuffer, 10 * 1024 * 1024);
-    cb(null, "backgrounded · 1234abcd · test-name\n", "");
+    if (args[0] === "--bg") {
+      assert.equal(opts.cwd, claudeTestDir);
+      assert.equal(opts.timeout, 60000);
+      assert.equal(opts.maxBuffer, 10 * 1024 * 1024);
+      cb(null, "backgrounded · 1234abcd · test-name\n", "");
+    } else {
+      cb(null, "[]", "");
+    }
   };
 
   const allowedBypassConfig = {
@@ -193,7 +216,8 @@ export async function runClaudeCliTests(testDir) {
       claude: {
         allowed_permission_modes: ["auto", "default", "acceptEdits", "plan", "bypassPermissions"],
         default_model: "sonnet",
-        default_permission_mode: "auto"
+        default_permission_mode: "auto",
+        default_handoff: "background"
       }
     }
   };
@@ -202,6 +226,7 @@ export async function runClaudeCliTests(testDir) {
     folder: claudeTestDir,
     prompt: "test bypass",
     permissionMode: "bypassPermissions",
+    handoff: "background",
     config: allowedBypassConfig,
     execFileFn: mockExecFileSuccess,
     sleepFn: async () => {},
@@ -224,7 +249,7 @@ export async function runClaudeCliTests(testDir) {
 
   assert.throws(() => parseShortId("No session started"), /Failed to parse short session ID/);
 
-  // 10h: lookupSessionId and retry logic
+  // 10h: lookupSessionId and retry logic (strictly matches short id only)
   console.log("  Testing lookupSessionId and retries (10 tries x 500ms)...");
   let lookupAttempts = 0;
   const mockLookupExec = (file, args, opts, cb) => {
@@ -233,10 +258,8 @@ export async function runClaudeCliTests(testDir) {
     assert.equal(opts.timeout, 15000);
     assert.equal(opts.maxBuffer, 10 * 1024 * 1024);
     if (lookupAttempts === 1) {
-      // First try: session not listed yet
       cb(null, "[]", "");
     } else {
-      // Second try: session is present
       cb(null, JSON.stringify([
         { id: "e4f5a6b7", sessionId: "uuid-9999-8888-7777", name: "my-session" }
       ]), "");
@@ -286,7 +309,285 @@ export async function runClaudeCliTests(testDir) {
   });
   assert.equal(matchedById, "uuid-new-correct-session", "Must match on short id and not hit older session with same name");
 
-  // 10i: CLI error formatting and diagnosability (Issue #18 lesson)
+  // 10i: waitForSessionIdle unit test
+  console.log("  Testing waitForSessionIdle...");
+  let waitPollCount = 0;
+  const mockWaitExec = (file, args, opts, cb) => {
+    waitPollCount++;
+    if (waitPollCount === 1) {
+      cb(null, JSON.stringify([{ id: "idle123", status: "busy", sessionId: "sess-1" }]), "");
+    } else {
+      cb(null, JSON.stringify([{ id: "idle123", status: "idle", sessionId: "sess-1" }]), "");
+    }
+  };
+  const isNowIdle = await waitForSessionIdle({
+    claudeExec: "/fake/claude",
+    cwd: claudeTestDir,
+    shortId: "idle123",
+    maxWaitRetries: 5,
+    waitDelayMs: 10,
+    execFileFn: mockWaitExec,
+    sleepFn: async () => {}
+  });
+  assert.equal(isNowIdle, true);
+  assert.equal(waitPollCount, 2);
+
+  // Timeout returns false
+  const timedOutIdle = await waitForSessionIdle({
+    claudeExec: "/fake/claude",
+    cwd: claudeTestDir,
+    shortId: "idle123",
+    maxWaitRetries: 2,
+    waitDelayMs: 10,
+    execFileFn: (f, a, o, cb) => cb(null, JSON.stringify([{ id: "idle123", status: "busy", sessionId: "sess-1" }]), ""),
+    sleepFn: async () => {}
+  });
+  assert.equal(timedOutIdle, false);
+
+  // 10j: Desktop handoff: idle -> stop -> open (Darwin, success)
+  console.log("  Testing Desktop handoff: idle -> stop -> open...");
+  const recordedCommands = [];
+  const mockExecDesktopSuccess = (file, args, opts, cb) => {
+    recordedCommands.push({ file, args });
+    if (file === "open" || file === "/mock/open") {
+      return cb(null, "", "");
+    }
+    if (args[0] === "--bg") {
+      return cb(null, "backgrounded · handoff1 · desktop-session\n", "");
+    }
+    if (args[0] === "agents") {
+      return cb(null, JSON.stringify([
+        { id: "handoff1", sessionId: "uuid-handoff-1111", status: "idle" }
+      ]), "");
+    }
+    if (args[0] === "stop") {
+      assert.equal(args[1], "handoff1");
+      return cb(null, "Stopped session handoff1\n", "");
+    }
+    cb(new Error(`Unexpected command: ${file} ${args}`));
+  };
+
+  const handoffSuccessRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    name: "desktop-session",
+    platform: "darwin",
+    config: DEFAULT_CONFIG,
+    execFileFn: mockExecDesktopSuccess,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude",
+    env: { DEADDROP_OPEN_BIN: "/mock/open" }
+  });
+
+  assert.equal(handoffSuccessRes.outcome, "handed_off");
+  assert.equal(handoffSuccessRes.desktopId, "local_uuid-handoff-1111");
+  assert.equal(handoffSuccessRes.sessionId, "uuid-handoff-1111");
+
+  // Verify stop and open were called
+  const stopCall = recordedCommands.find((c) => c.args && c.args[0] === "stop");
+  assert.ok(stopCall, "claude stop must be called");
+  assert.equal(stopCall.args[1], "handoff1");
+
+  const openCall = recordedCommands.find((c) => c.file === "/mock/open" || (c.args && c.args[0] === "claude://resume?session=uuid-handoff-1111"));
+  assert.ok(openCall, "open claude://resume must be called");
+
+  // 10k: Desktop handoff timeout (session never idle -> no stop, outcome: still_running)
+  console.log("  Testing Desktop handoff timeout (no stop, still_running)...");
+  const timeoutCommands = [];
+  const mockExecTimeout = (file, args, opts, cb) => {
+    timeoutCommands.push({ file, args });
+    if (args[0] === "--bg") {
+      return cb(null, "backgrounded · timeout1 · timeout-session\n", "");
+    }
+    if (args[0] === "agents") {
+      return cb(null, JSON.stringify([
+        { id: "timeout1", sessionId: "uuid-timeout-2222", status: "busy" }
+      ]), "");
+    }
+    cb(new Error(`Unexpected command: ${file} ${args}`));
+  };
+
+  const timeoutRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    name: "timeout-session",
+    platform: "darwin",
+    config: DEFAULT_CONFIG,
+    execFileFn: mockExecTimeout,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude"
+  });
+
+  assert.equal(timeoutRes.outcome, "still_running");
+  assert.equal(timeoutRes.desktopId, null);
+  assert.ok(!timeoutCommands.some((c) => c.args && c.args[0] === "stop"), "Must NOT stop session on timeout");
+
+  // 10l: Pre-stop check: status went busy or sessionId changed between idle check and stop -> no stop
+  console.log("  Testing Desktop handoff pre-stop guardrail (went busy right before stop)...");
+  let preStopCheckAttempts = 0;
+  const preStopCommands = [];
+  const mockExecWentBusy = (file, args, opts, cb) => {
+    preStopCommands.push({ file, args });
+    if (args[0] === "--bg") {
+      return cb(null, "backgrounded · busybeforestop · went-busy-session\n", "");
+    }
+    if (args[0] === "agents") {
+      preStopCheckAttempts++;
+      if (preStopCheckAttempts <= 2) {
+        // First lookup and idle wait: return idle
+        return cb(null, JSON.stringify([
+          { id: "busybeforestop", sessionId: "uuid-busy-3333", status: "idle" }
+        ]), "");
+      } else {
+        // Pre-stop re-read: status went busy!
+        return cb(null, JSON.stringify([
+          { id: "busybeforestop", sessionId: "uuid-busy-3333", status: "busy" }
+        ]), "");
+      }
+    }
+    cb(new Error(`Unexpected command: ${file} ${args}`));
+  };
+
+  const wentBusyRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    name: "went-busy-session",
+    platform: "darwin",
+    config: DEFAULT_CONFIG,
+    execFileFn: mockExecWentBusy,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude"
+  });
+
+  assert.equal(wentBusyRes.outcome, "still_running");
+  assert.equal(wentBusyRes.desktopId, null);
+  assert.ok(!preStopCommands.some((c) => c.args && c.args[0] === "stop"), "Must NOT stop session if status went busy right before stop");
+
+  // 10m: Desktop handoff on non-darwin (skip BOTH stop and open, report background)
+  console.log("  Testing Desktop handoff on non-darwin (skip stop and open, background)...");
+  const linuxCommands = [];
+  const mockExecLinux = (file, args, opts, cb) => {
+    linuxCommands.push({ file, args });
+    if (args[0] === "--bg") {
+      return cb(null, "backgrounded · linux1 · linux-session\n", "");
+    }
+    if (args[0] === "agents") {
+      return cb(null, JSON.stringify([
+        { id: "linux1", sessionId: "uuid-linux-4444", status: "idle" }
+      ]), "");
+    }
+    cb(new Error(`Unexpected command: ${file} ${args}`));
+  };
+
+  const linuxRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    name: "linux-session",
+    platform: "linux",
+    config: DEFAULT_CONFIG,
+    execFileFn: mockExecLinux,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude"
+  });
+
+  assert.equal(linuxRes.outcome, "background");
+  assert.equal(linuxRes.desktopId, null);
+  assert.ok(!linuxCommands.some((c) => c.args && c.args[0] === "stop"), "Must NOT stop session on non-darwin");
+  assert.ok(!linuxCommands.some((c) => c.file === "open"), "Must NOT open on non-darwin");
+
+  // 10n: Desktop handoff when sessionId is null (skip stop and open, report background)
+  console.log("  Testing Desktop handoff when sessionId is null...");
+  const noSessionIdCommands = [];
+  const mockExecNoSessionId = (file, args, opts, cb) => {
+    noSessionIdCommands.push({ file, args });
+    if (args[0] === "--bg") {
+      return cb(null, "backgrounded · nosess1 · no-sess-session\n", "");
+    }
+    if (args[0] === "agents") {
+      return cb(null, "[]", ""); // session never found
+    }
+    cb(new Error(`Unexpected command: ${file} ${args}`));
+  };
+
+  const noSessionIdRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    name: "no-sess-session",
+    platform: "darwin",
+    config: DEFAULT_CONFIG,
+    execFileFn: mockExecNoSessionId,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude"
+  });
+
+  assert.equal(noSessionIdRes.outcome, "background");
+  assert.equal(noSessionIdRes.sessionId, null);
+  assert.equal(noSessionIdRes.desktopId, null);
+  assert.ok(!noSessionIdCommands.some((c) => c.args && c.args[0] === "stop"), "Must NOT stop session when sessionId is null");
+
+  // 10o: Desktop handoff open failure after successful stop (stopped_not_opened)
+  console.log("  Testing Desktop handoff open failure (stopped_not_opened)...");
+  const mockExecOpenFails = (file, args, opts, cb) => {
+    if (file === "open" || file === "/mock/open") {
+      return cb(new Error("No application is registered to open this URL"));
+    }
+    if (args[0] === "--bg") {
+      return cb(null, "backgrounded · openfail1 · openfail-session\n", "");
+    }
+    if (args[0] === "agents") {
+      return cb(null, JSON.stringify([
+        { id: "openfail1", sessionId: "uuid-openfail-5555", status: "idle" }
+      ]), "");
+    }
+    if (args[0] === "stop") {
+      return cb(null, "Stopped session openfail1\n", "");
+    }
+    cb(new Error(`Unexpected command: ${file} ${args}`));
+  };
+
+  const openFailRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    name: "openfail-session",
+    platform: "darwin",
+    config: DEFAULT_CONFIG,
+    execFileFn: mockExecOpenFails,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude",
+    env: { DEADDROP_OPEN_BIN: "/mock/open" }
+  });
+
+  assert.equal(openFailRes.outcome, "stopped_not_opened");
+  assert.equal(openFailRes.desktopId, "local_uuid-openfail-5555");
+  assert.equal(openFailRes.sessionId, "uuid-openfail-5555");
+
+  // 10p: Background mode requires prompt; desktop mode allows omitted prompt
+  console.log("  Testing prompt requirements for background vs desktop handoff...");
+  await assert.rejects(
+    async () => startClaudeSession({
+      folder: claudeTestDir,
+      handoff: "background",
+      config: DEFAULT_CONFIG
+    }),
+    /Missing required parameter: 'prompt' \(required when handoff is 'background'\)/
+  );
+
+  // Desktop mode with omitted prompt succeeds
+  const desktopNoPromptRes = await startClaudeSession({
+    folder: claudeTestDir,
+    handoff: "desktop",
+    platform: "linux", // test on linux to skip idle wait
+    config: DEFAULT_CONFIG,
+    execFileFn: (file, args, opts, cb) => {
+      if (args[0] === "--bg") return cb(null, "backgrounded · noprompt1 · noprompt-session\n", "");
+      if (args[0] === "agents") return cb(null, JSON.stringify([{ id: "noprompt1", sessionId: "uuid-noprompt" }]), "");
+    },
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude"
+  });
+  assert.equal(desktopNoPromptRes.id, "noprompt1");
+
+  // 10q: CLI error formatting and diagnosability (Issue #18 lesson)
   console.log("  Testing CLI error formatting and diagnosability...");
   const mockErr = new Error("Command failed");
   mockErr.code = 1;
@@ -317,8 +618,8 @@ export async function runClaudeCliTests(testDir) {
     }
   );
 
-  // 10j: .sessions.jsonl logging
-  console.log("  Testing .sessions.jsonl logging...");
+  // 10r: .sessions.jsonl logging with handoff and outcome
+  console.log("  Testing .sessions.jsonl logging with handoff and outcome...");
   const logMailboxDir = path.join(claudeTestDir, "mailbox-log");
   ensureDirectory(logMailboxDir);
 
@@ -337,6 +638,7 @@ export async function runClaudeCliTests(testDir) {
     model: "sonnet",
     effort: "high",
     permissionMode: "auto",
+    handoff: "background",
     from: "juno",
     deaddropDir: logMailboxDir,
     config: DEFAULT_CONFIG,
@@ -347,6 +649,8 @@ export async function runClaudeCliTests(testDir) {
 
   assert.equal(sessionRes.id, "feedbeef");
   assert.equal(sessionRes.sessionId, "uuid-logged-1234");
+  assert.equal(sessionRes.handoff, "background");
+  assert.equal(sessionRes.outcome, "background");
 
   const sessionsLogFile = path.join(logMailboxDir, ".sessions.jsonl");
   assert.ok(fs.existsSync(sessionsLogFile), ".sessions.jsonl must exist");
@@ -359,17 +663,19 @@ export async function runClaudeCliTests(testDir) {
   assert.equal(parsedLog.model, "sonnet");
   assert.equal(parsedLog.effort, "high");
   assert.equal(parsedLog.permission_mode, "auto");
+  assert.equal(parsedLog.handoff, "background");
+  assert.equal(parsedLog.outcome, "background");
   assert.equal(parsedLog.id, "feedbeef");
   assert.equal(parsedLog.sessionId, "uuid-logged-1234");
   assert.ok(parsedLog.prompt.includes("[Started via Dead Drop by juno."));
   assert.ok(parsedLog.prompt.includes("Log me please"));
 
-  // 10k: End-to-end MCP Client tool call start_session
-  console.log("  Testing end-to-end MCP Client start_session...");
+  // 10s: End-to-end MCP Client tool call start_session in desktop mode
+  console.log("  Testing end-to-end MCP Client start_session in desktop mode...");
   const e2eMcpDir = path.join(claudeTestDir, "e2e-mcp");
   ensureDirectory(e2eMcpDir);
 
-  // Create mock claude executable script (ensures zero real Claude CLI processes)
+  // Create mock claude executable script
   const mockClaudeScript = path.join(e2eMcpDir, "mock_claude.sh");
   fs.writeFileSync(mockClaudeScript, `#!/bin/sh
 if [ "$1" = "--bg" ]; then
@@ -390,11 +696,17 @@ elif [ "$1" = "agents" ] && [ "$2" = "--json" ] && [ "$3" = "--all" ]; then
 ]
 JSONEOF
   exit 0
+elif [ "$1" = "stop" ]; then
+  echo "Stopped session $2"
+  exit 0
 else
   echo "Unknown command: $@" >&2
   exit 1
 fi
 `, { mode: 0o755 });
+
+  const mockOpenScript = path.join(e2eMcpDir, "mock_open.sh");
+  fs.writeFileSync(mockOpenScript, `#!/bin/sh\nexit 0\n`, { mode: 0o755 });
 
   const mcpTransport = new StdioClientTransport({
     command: process.execPath,
@@ -402,7 +714,8 @@ fi
     env: {
       ...process.env,
       DEADDROP_DIR: e2eMcpDir,
-      DEADDROP_CLAUDE_PATH: mockClaudeScript
+      DEADDROP_CLAUDE_PATH: mockClaudeScript,
+      DEADDROP_OPEN_BIN: mockOpenScript
     }
   });
 
@@ -410,13 +723,12 @@ fi
   await mcpClient.connect(mcpTransport);
 
   try {
-    // Successful start_session call
+    // Successful start_session call (defaults to desktop handoff)
     const startRes = await mcpClient.callTool({
       name: "start_session",
       arguments: {
         folder: claudeTestDir,
-        prompt: "Start my background task",
-        name: "mcp-test-session",
+        name: "mcp-desktop-session",
         model: "sonnet",
         effort: "medium",
         permission_mode: "auto"
@@ -425,12 +737,10 @@ fi
 
     assert.equal(startRes.isError, undefined);
     const text = startRes.content[0].text;
-    assert.ok(text.includes("Started Claude Code session 'mcp-test-session'"));
+    assert.ok(text.includes("Started Claude Code session 'mcp-desktop-session'"));
     assert.ok(text.includes("ID: 7f8a9b0c"));
-    assert.ok(text.includes("Model: sonnet"));
-    assert.ok(text.includes("Session ID: a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
-    assert.ok(text.includes("claude://resume?session=a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
-    assert.ok(text.includes("claude agents --json --all"));
+    assert.ok(text.includes("Desktop session ID: local_a1b2c3d4-e5f6-7890-abcd-ef1234567890"));
+    assert.ok(text.includes('To give it the task so it runs live in the desktop app, call the desktop app\'s send_message tool with session_id "local_a1b2c3d4-e5f6-7890-abcd-ef1234567890" and your task as the message. If you don\'t have that tool, call start_session again with handoff: "background".'));
 
     // Verify sessions.jsonl created by MCP tool call
     const mcpLogFile = path.join(e2eMcpDir, ".sessions.jsonl");
@@ -438,6 +748,8 @@ fi
     const mcpLogData = JSON.parse(fs.readFileSync(mcpLogFile, "utf8").trim());
     assert.equal(mcpLogData.id, "7f8a9b0c");
     assert.equal(mcpLogData.sessionId, "a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+    assert.equal(mcpLogData.handoff, "desktop");
+    assert.equal(mcpLogData.outcome, "handed_off");
 
     // Rejected permission_mode call
     const rejectRes = await mcpClient.callTool({
@@ -450,6 +762,17 @@ fi
     });
     assert.equal(rejectRes.isError, true);
     assert.ok(rejectRes.content[0].text.includes("Permission mode 'bypassPermissions' is not allowed"));
+
+    // Background handoff requiring prompt
+    const noPromptBgRes = await mcpClient.callTool({
+      name: "start_session",
+      arguments: {
+        folder: claudeTestDir,
+        handoff: "background"
+      }
+    });
+    assert.equal(noPromptBgRes.isError, true);
+    assert.ok(noPromptBgRes.content[0].text.includes("Missing required parameter: 'prompt'"));
   } finally {
     await mcpClient.close();
   }
