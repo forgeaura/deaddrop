@@ -23,6 +23,7 @@ import { exportSession, cleanupSession, reconcileSession, getSessionFilePath } f
 import { setupSidecar } from "../scripts/setup-sidecar.js";
 import { startSettingsServer, loadConfig, saveConfig, DEFAULT_CONFIG } from "../lib/settings-server.js";
 import { runClaudeCliTests } from "./test-claude-cli.js";
+import { runAntigravityTests } from "./test-antigravity.js";
 
 async function runTests() {
   console.log("=== Starting Dead Drop Test Suite ===");
@@ -194,22 +195,34 @@ async function runTests() {
     console.log("✓ getAgentapiExecutable prefers env var, then config, then default");
 
     // Test 7c: wake attempted when wake_on_mail is true with a valid conversation_id.
-    // There's no real agentapi binary in the test environment, so the attempt itself
-    // will fail at the exec layer -- but that's the point: the failure reason should
-    // come from *trying* agentapi, not from being skipped for a config reason.
+    // A stub agentapi fails the way the real one does (#18): exit 1, the reason as
+    // JSON on stdout, nothing on stderr. The failure reason must come from *trying*
+    // agentapi (not from being skipped for a config reason) and must carry
+    // agentapi's own error text and exit code, without the session token.
     console.log("\n[Test 7c] Wake mechanism: wake attempted when wake_on_mail is true...");
+    const failingAgentapi = path.join(wakeTestDir, "failing_agentapi.sh");
+    fs.writeFileSync(failingAgentapi, `#!/bin/sh
+printf '{\\n  "response": {},\\n  "error": "project_id is required when providing project_env_config (token %s)"\\n}\\n' "$ANTIGRAVITY_CSRF_TOKEN"
+exit 1
+`, { mode: 0o755 });
     fs.writeFileSync(configPath, JSON.stringify({
       agents: {
-        antigravity: { wake_on_mail: true, wake_method: "agentapi", conversation_id: "conv-abc-123" }
+        antigravity: {
+          wake_on_mail: true,
+          wake_method: "agentapi",
+          conversation_id: "conv-abc-123",
+          agentapi_path: failingAgentapi
+        }
       }
     }), "utf8");
 
     // Seed a valid mock session file so resolveAntigravitySession succeeds and allows
     // wakeViaAgentapi to proceed to the exec layer even when running outside Antigravity.
     const mockSessionPath = path.join(wakeTestDir, SESSION_FILENAME);
+    const wakeSentinelToken = "wake-sentinel-token-7c";
     fs.writeFileSync(mockSessionPath, JSON.stringify({
       address: "localhost:12345",
-      csrf_token: "mock-token",
+      csrf_token: wakeSentinelToken,
       pid: process.pid
     }), { mode: 0o600 });
 
@@ -225,8 +238,14 @@ async function runTests() {
     );
     assert.ok(!/wake_on_mail/.test(wakeAttempted.reason || ""));
     assert.ok(!/not configured/.test(wakeAttempted.reason || ""));
+    // #18 regression: agentapi's stdout error and exit code are surfaced, the token is not
+    assert.equal(wakeAttempted.woke, false);
+    assert.match(wakeAttempted.reason, /project_id is required when providing project_env_config/);
+    assert.match(wakeAttempted.reason, /exit code \/ error code: 1/);
+    assert.ok(!wakeAttempted.reason.includes(wakeSentinelToken), "wake reason must not contain the session token");
+    assert.match(wakeAttempted.reason, /<redacted>/);
     try { fs.unlinkSync(mockSessionPath); } catch {}
-    console.log(`✓ Wake was attempted (not skipped for a config reason) when wake_on_mail is true`);
+    console.log(`✓ Wake was attempted, and agentapi's stdout error and exit code are surfaced without the token`);
 
     // Test 7d: wake skipped (but message file still written) when wake_on_mail is false.
     console.log("\n[Test 7d] Wake mechanism: skipped when wake_on_mail is false...");
@@ -381,6 +400,45 @@ async function runTests() {
     assert.ok(!fs.existsSync(exportedFile));
     console.log("✓ sidecar exportSession writes 0600 file and cleanupSession removes it");
 
+    // Test 7h2: sidecar exports the project id, and heals its own file that lacks it
+    console.log("\n[Test 7h2] sidecar exports project_id and heals a file without it...");
+    const projectSidecarDir = path.join(testDir, "sidecar-project-test");
+    ensureDirectory(projectSidecarDir);
+    const savedProjectEnv = process.env.ANTIGRAVITY_PROJECT_ID;
+    delete process.env.ANTIGRAVITY_PROJECT_ID;
+
+    // An older sidecar wrote this file for our pid, without project_id
+    exportSession({ address: "localhost:57850", csrfToken: "tok-sidecar-2", deaddropDir: projectSidecarDir, pid: process.pid });
+    const projectSessionFile = getSessionFilePath(projectSidecarDir);
+    assert.equal("project_id" in JSON.parse(fs.readFileSync(projectSessionFile, "utf8")), false);
+    const noProjectSession = resolveAntigravitySession({ deaddropDir: projectSidecarDir });
+    assert.equal(noProjectSession.valid, true);
+    assert.equal(noProjectSession.projectId, null, "a missing project id must not invalidate the session");
+
+    const healed = reconcileSession({
+      address: "localhost:57850",
+      csrfToken: "tok-sidecar-2",
+      projectId: "proj-from-sidecar",
+      deaddropDir: projectSidecarDir,
+      pid: process.pid
+    });
+    assert.equal(healed.action, "healed");
+    assert.equal(healed.reason, "missing_project_id");
+    assert.equal(JSON.parse(fs.readFileSync(projectSessionFile, "utf8")).project_id, "proj-from-sidecar");
+    assert.equal(resolveAntigravitySession({ deaddropDir: projectSidecarDir }).projectId, "proj-from-sidecar");
+
+    // Once it has the project id, the next tick writes nothing
+    const unchanged = reconcileSession({
+      address: "localhost:57850",
+      csrfToken: "tok-sidecar-2",
+      projectId: "proj-from-sidecar",
+      deaddropDir: projectSidecarDir,
+      pid: process.pid
+    });
+    assert.equal(unchanged.action, "none");
+    if (savedProjectEnv) process.env.ANTIGRAVITY_PROJECT_ID = savedProjectEnv;
+    console.log("✓ sidecar exports project_id, heals its own file without it, and the session reports it");
+
     // Test 7i: setupSidecar registration and uninstall
     console.log("\n[Test 7i] setupSidecar registration and uninstallation...");
     const setupDir = path.join(testDir, "setup-sidecar-test");
@@ -419,7 +477,8 @@ cat << EOF > "${mockOutputLog}"
 {
   "address": "$ANTIGRAVITY_LS_ADDRESS",
   "csrf_token": "$ANTIGRAVITY_CSRF_TOKEN",
-  "args": ["$1", "$2", "$3", "$4"]
+  "project_id": "$ANTIGRAVITY_PROJECT_ID",
+  "args": ["$1", "$2", "$3", "$4", "$5"]
 }
 EOF
 exit 0
@@ -451,6 +510,7 @@ exit 0
     fs.writeFileSync(path.join(e2eDir, SESSION_FILENAME), JSON.stringify({
       address: "localhost:61234",
       csrf_token: "test-token-777",
+      project_id: "sidecar-project-1",
       pid: process.pid
     }), { mode: 0o600 });
 
@@ -467,10 +527,33 @@ exit 0
     const mockResult = JSON.parse(fs.readFileSync(mockOutputLog, "utf8"));
     assert.equal(mockResult.address, "localhost:61234");
     assert.equal(mockResult.csrf_token, "test-token-777");
+    assert.equal(mockResult.project_id, "sidecar-project-1", "wake must pass the sidecar's project id (#18)");
     assert.equal(mockResult.args[0], "send-message");
     assert.equal(mockResult.args[1], "--title=Dead Drop Mail");
-    assert.equal(mockResult.args[2], "conv-target-999");
-    assert.equal(mockResult.args[3], "New Dead Drop mail from claude: test-mail.md. Read it with read_messages.");
+    assert.equal(mockResult.args[2], "--", "`--` must precede the conversation id");
+    assert.equal(mockResult.args[3], "conv-target-999");
+    assert.equal(mockResult.args[4], "New Dead Drop mail from claude: test-mail.md. Read it with read_messages.");
+
+    // The agent's own project_id (written by register_as) wins over the sidecar's
+    fs.writeFileSync(path.join(e2eDir, ".config.json"), JSON.stringify({
+      agents: {
+        antigravity: {
+          wake_on_mail: true,
+          wake_method: "agentapi",
+          conversation_id: "conv-target-999",
+          project_id: "agent-project-2",
+          agentapi_path: mockAgentapiScript
+        }
+      }
+    }), "utf8");
+    const wakeAgentProject = await wakeAgentIfTargeted({
+      to: "antigravity",
+      from: "claude",
+      filename: "test-mail.md",
+      deaddropDir: e2eDir
+    });
+    assert.equal(wakeAgentProject.woke, true);
+    assert.equal(JSON.parse(fs.readFileSync(mockOutputLog, "utf8")).project_id, "agent-project-2");
 
     // Restore env vars
     if (origLs) process.env.ANTIGRAVITY_LS_ADDRESS = origLs;
@@ -984,6 +1067,9 @@ exit 0
 
     // Test 10: Claude CLI & start_session MCP Tool
     await runClaudeCliTests(testDir);
+
+    // Test 11: start_antigravity_session
+    await runAntigravityTests(testDir);
 
     console.log("\n=== ALL TESTS PASSED SUCCESSFULLY ===");
   } finally {

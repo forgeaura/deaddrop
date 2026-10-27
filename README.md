@@ -47,6 +47,19 @@ In desktop mode this tool starts the session, waits for its short bootstrap turn
 
 Returns desktop session ID (`local_<sessionId>`) and instructions for delegating the task via the desktop app's `send_message` tool, or background session details if `handoff: "background"`.
 
+### 5. `start_antigravity_session`
+Starts a new Antigravity (Gemini) conversation with `agentapi new-conversation` and returns its conversation ID.
+- `prompt` *(string, required)*: initial instructions. Dead Drop prepends the same "came from an agent, not Sarah" notice as `start_session`.
+- `title` *(string, optional)*: conversation title shown in Antigravity. Must not start with `-` or be empty.
+- `model` *(string, optional, `"flash_lite"` | `"flash"` | `"pro"`)*: Antigravity model tier. Omitted means agentapi's default, `flash`.
+- `project` *(string, optional)*: the Antigravity project to start the conversation in: an exact project name (e.g. `"intervent"`) or an absolute folder of one. See [Antigravity project id](#antigravity-project-id) for the default.
+- `register_as` *(string, optional)*: also register the conversation as a Dead Drop recipient under this name, so mail sent to it wakes the conversation. Adds `agents.<name> = { wake_on_mail: true, wake_method: "agentapi", conversation_id, project_id }` to `.config.json`. The name must be 1-64 lowercase letters, digits or `-`, not starting with `-`. Dead Drop refuses, before starting anything, a name that is already an agent in `.config.json` or the defaults, is reserved (`all`, `sarah`, `unknown`), or already appears as `to` or `from` on any message in the mailbox (recipients like `wren` get mail without a config entry). It never overwrites an existing recipient.
+- `from` *(string, optional)*: sender identity. Defaults to caller agent identity.
+
+The result names the conversation ID, the model, the project actually used and where that project came from (the `project` parameter, `.config.json`, or the sidecar), so a caller who forgot `project` can see where the conversation landed. All values are passed to `agentapi` as separate arguments with no shell, and the prompt always follows `--`, so it can never be read as a flag. The session token is passed only in `agentapi`'s environment; it never appears in arguments, results, errors or logs.
+
+`--profile` is not supported yet. It isn't yet known what an Antigravity profile can set (for example which model it uses), so a caller couldn't tell what they were starting. Issue #26 investigates profiles and adds the parameter once that's documented.
+
 ---
 
 ## File Format
@@ -83,6 +96,7 @@ All configuration lives in a single JSON file inside the mailbox folder: `<mailb
       "wake_on_mail": true,
       "wake_method": "agentapi",
       "conversation_id": "<conversation-id>",
+      "project_id": "<optional-antigravity-project-id>",
       "agentapi_path": "/optional/custom/path/to/agentapi"
     },
     "claude": {
@@ -111,6 +125,7 @@ Each key under `agents` is a recipient name (matched case-insensitively against 
   - `"agentapi"` — the only method that's actually wired up today. Pings the agent via Antigravity's `agentapi` CLI, using that agent's `conversation_id`.
   - `"unsupported"` — this agent cannot be woken from outside at all. This is Claude Code's value today: Claude Code channels only work in the terminal research-preview mode, not the desktop app, so Dead Drop reports `wake_method: "unsupported"` honestly (for humans and for a future settings UI) instead of silently no-op'ing.
 - **`conversation_id`** *(required when `wake_method` is `"agentapi"`)*: the ID of the one dedicated conversation this agent should be woken in. Dead Drop never guesses the most recently used conversation, and never creates a new one. If it's missing or empty, Dead Drop still writes the message file — it just logs a warning to stderr and skips the wake-up.
+- **`project_id`** *(optional, only meaningful with `wake_method: "agentapi"`)*: the Antigravity project ID passed to `agentapi` as `ANTIGRAVITY_PROJECT_ID`. On an agent written by `register_as` it is the project its conversation was started in, and wakes use it. On `agents.antigravity` it is also the default project for `start_antigravity_session`. See [Antigravity project id](#antigravity-project-id).
 - **`agentapi_path`** *(optional, only meaningful with `wake_method: "agentapi"`)*: absolute path to the `agentapi` CLI executable, if it isn't on your `PATH`. Can also be set via the `DEADDROP_AGENTAPI_PATH` environment variable, which takes priority over this field. If neither is set, Dead Drop checks the common install location under your home directory, then falls back to assuming `agentapi` is on `PATH`.
 - **`default_model`** *(optional, Claude only)*: the model `start_session` uses when the caller gives none. Defaults to `"claude-haiku-5-5"` when unset. The settings UI never writes this field; edit it by hand.
 - **`blocked_models`** *(optional, Claude only, default `[]`)*: a list of model denylist patterns. Each pattern is a whole-string glob: `*` matches any run of characters, everything else is literal, and matching is case-insensitive. `"sonnet"` blocks only `sonnet`; `"*sonnet*"` blocks `claude-sonnet-5-5`, `SONNET` and any other model containing `sonnet`. The check runs on the resolved model, so a blocked `default_model` is rejected too. A blocked start fails with an error naming the model and pattern, and nothing is spawned or logged. Malformed values (anything other than an array of non-empty strings) fail closed: every `start_session` for Claude is rejected until the value is fixed. The settings UI never writes this field; edit it by hand.
@@ -190,9 +205,14 @@ Claude Code holds a cross-session message for its user's approval when the sende
 The Claude desktop app's own `start_session` (not Dead Drop's) only starts a session in the caller's permission mode or a lower one (as of 2026-10-27).
 
 #### Session Log (`.sessions.jsonl`)
-Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`), tracking `handoff` and `outcome` (`handed_off`, `still_running`, or `background`):
+Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`). A `launcher` field says which tool started it. Claude sessions (`"launcher":"claude"`) track `handoff` and `outcome` (`handed_off`, `still_running`, or `background`):
 ```json
-{"time":"2026-10-20T12:00:00+08:00","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729468000000","model":"claude-haiku-5-5","effort":"medium","permission_mode":"auto","handoff":"desktop","outcome":"handed_off","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
+{"time":"2026-10-20T12:00:00+08:00","launcher":"claude","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729468000000","model":"claude-haiku-5-5","effort":"medium","permission_mode":"auto","handoff":"desktop","outcome":"handed_off","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
+```
+
+Antigravity conversations started by `start_antigravity_session` are logged with `"launcher":"antigravity"`. The session token is never logged:
+```json
+{"time":"2026-10-28T10:00:00+08:00","launcher":"antigravity","from":"wren","title":"Second opinion","model":"pro","project_id":"<project-id>","project_source":"param","conversation_id":"<conversation-id>","register_as":"gemini-reviewer","prompt":"..."}
 ```
 
 #### Viewing Sessions
@@ -303,8 +323,23 @@ When Dead Drop runs in a process that Antigravity did not launch (such as Dead D
 3. The sidecar atomically writes `<mailbox>/.antigravity_session.json` (file permissions `0600`).
 4. When Claude Code (or any external caller) sends mail to Antigravity, Dead Drop reads `<mailbox>/.antigravity_session.json` and passes the active address and CSRF token to `agentapi`.
 
+5. The sidecar also exports the Antigravity project it runs in (`project_id`). `agentapi` needs that project id when it is called from a process Antigravity didn't launch: `new-conversation` fails with "project_id is required when providing project_env_config" without it.
+
+**After updating Dead Drop, restart the sidecar** (restart Antigravity, or disable and re-enable the `deaddrop` sidecar) so the running sidecar picks up the new code and exports `project_id`. Until it does, wakes still work as before but carry no project id, and `start_antigravity_session` needs `project` or `agents.antigravity.project_id`.
+
+#### Antigravity project id
+`agentapi` calls from Dead Drop use the first of these that is set:
+1. the `project` parameter of `start_antigravity_session`, resolved read-only against Antigravity's project registry (`~/.gemini/config/projects/<id>.json`) by exact project name or by absolute git folder. An unknown or ambiguous value is an error and nothing starts;
+2. the woken agent's own `project_id` (wakes only);
+3. `agents.antigravity.project_id` in `.config.json`;
+4. the sidecar's exported `project_id` (or `ANTIGRAVITY_PROJECT_ID` when Dead Drop itself runs inside Antigravity).
+
+The sidecar is registered for all projects, so its project is whichever Antigravity started it in. Pass `project` whenever the conversation belongs to a specific project. If none of these is set, `start_antigravity_session` fails before starting anything; a wake goes ahead without a project id.
+
 #### Graceful Failure
 If `<mailbox>/.antigravity_session.json` is missing, unreadable, or stale (the sidecar PID is no longer running), Dead Drop skips the wake-up, logs an informative notice to stderr advising to run `npm run setup-sidecar`, and proceeds normally. As with all Dead Drop wake failures, the message file itself is always delivered safely.
+
+When `agentapi` itself fails, it exits with code 1 and prints the reason as JSON on stdout, usually with nothing on stderr. Dead Drop reports agentapi's own error text, the exit code, stderr and stdout in the wake-up note (with the session token redacted), so the cause is visible instead of a bare "Command failed".
 
 #### Known Limitations
 - **Multi-window Antigravity**: Dead Drop v1 assumes a single running Antigravity instance. In multi-window or multi-profile setups, the sidecar reflects the most recently active instance.

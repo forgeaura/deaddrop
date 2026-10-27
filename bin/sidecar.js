@@ -17,6 +17,7 @@ export function getSessionFilePath(dir = DEFAULT_DEADDROP_DIR) {
 export function exportSession({
   address = process.env.ANTIGRAVITY_LS_ADDRESS,
   csrfToken = process.env.ANTIGRAVITY_CSRF_TOKEN,
+  projectId = process.env.ANTIGRAVITY_PROJECT_ID,
   deaddropDir = DEFAULT_DEADDROP_DIR,
   pid = process.pid,
   ppid = process.ppid,
@@ -36,6 +37,8 @@ export function exportSession({
   const sessionData = {
     address,
     csrf_token: csrfToken,
+    // agentapi also needs the project id when called from outside Antigravity (#18, #25).
+    ...(projectId ? { project_id: projectId } : {}),
     pid,
     ppid,
     updated_at: new Date().toISOString(),
@@ -112,6 +115,7 @@ export function cleanupSession(dirOrOpts = DEFAULT_DEADDROP_DIR, maybePid = proc
 export function reconcileSession({
   address = process.env.ANTIGRAVITY_LS_ADDRESS,
   csrfToken = process.env.ANTIGRAVITY_CSRF_TOKEN,
+  projectId = process.env.ANTIGRAVITY_PROJECT_ID,
   deaddropDir = DEFAULT_DEADDROP_DIR,
   pid = process.pid,
   ppid = process.ppid,
@@ -132,7 +136,7 @@ export function reconcileSession({
   const sessionFile = getSessionFilePath(deaddropDir);
 
   if (!fs.existsSync(sessionFile)) {
-    const session = exportSession({ address, csrfToken, deaddropDir, pid, ppid });
+    const session = exportSession({ address, csrfToken, projectId, deaddropDir, pid, ppid });
     return { action: "healed", reason: "missing", session };
   }
 
@@ -142,17 +146,23 @@ export function reconcileSession({
     data = JSON.parse(raw);
   } catch {
     console.error(`[Dead Drop Sidecar] Corrupted session file detected. Re-exporting active session.`);
-    const session = exportSession({ address, csrfToken, deaddropDir, pid, ppid });
+    const session = exportSession({ address, csrfToken, projectId, deaddropDir, pid, ppid });
     return { action: "healed", reason: "corrupted", session };
   }
 
   if (!data || typeof data !== "object" || typeof data.pid !== "number") {
     console.error(`[Dead Drop Sidecar] Invalid session data detected. Re-exporting active session.`);
-    const session = exportSession({ address, csrfToken, deaddropDir, pid, ppid });
+    const session = exportSession({ address, csrfToken, projectId, deaddropDir, pid, ppid });
     return { action: "healed", reason: "corrupted", session };
   }
 
   if (data.pid === pid) {
+    // Our own file, but written without the project id we now have (e.g. by an
+    // older sidecar version): re-export so agentapi callers get it.
+    if (projectId && data.project_id !== projectId) {
+      const session = exportSession({ address, csrfToken, projectId, deaddropDir, pid, ppid });
+      return { action: "healed", reason: "missing_project_id", session };
+    }
     // Current file already matches this process's PID; nothing to heal, skip write entirely.
     return { action: "none", session: data };
   }
@@ -162,7 +172,7 @@ export function reconcileSession({
     console.error(
       `[Dead Drop Sidecar] Detected stale session file with dead PID ${data.pid}. Re-asserting active session (PID: ${pid}).`
     );
-    const session = exportSession({ address, csrfToken, deaddropDir, pid, ppid });
+    const session = exportSession({ address, csrfToken, projectId, deaddropDir, pid, ppid });
     return { action: "healed", reason: "dead_pid", previousPid: data.pid, session };
   }
 
@@ -176,7 +186,7 @@ export function reconcileSession({
     console.error(
       `[Dead Drop Sidecar] Won tie-break against older sibling PID ${data.pid} (our PID: ${pid}). Re-asserting active session.`
     );
-    const session = exportSession({ address, csrfToken, deaddropDir, pid, ppid });
+    const session = exportSession({ address, csrfToken, projectId, deaddropDir, pid, ppid });
     return { action: "healed", reason: "won_tiebreak", previousPid: data.pid, session };
   }
 }
