@@ -159,6 +159,33 @@ This starts a lightweight, on-demand local HTTP server that:
 - Allowed permission modes default to `["auto", "default", "acceptEdits", "plan"]`.
 - `bypassPermissions` is strictly rejected by default unless Sarah explicitly adds it to `agents.claude.allowed_permission_modes` in `<mailbox>/.config.json`.
 
+##### Opting in to `bypassPermissions`
+Add it to the list. The mode is accepted only when it appears in the list; there is no other special case for it:
+
+```json
+{
+  "agents": {
+    "claude": {
+      "allowed_permission_modes": ["auto", "default", "acceptEdits", "plan", "bypassPermissions"]
+    }
+  }
+}
+```
+
+Bypass mode means the Claude Code session runs its tools without asking for per-action approval. This is the owner's choice; Dead Drop never enables it on its own.
+
+A missing `allowed_permission_modes` field in an agent's entry falls back to the default list above. The fallback applies when the field is absent from the agent entry, not only when the whole config file is missing.
+
+##### `default_permission_mode` and `permission_mode`
+- `default_permission_mode` (in `agents.claude`, default `"auto"`) is used when `start_session` gets no `permission_mode`.
+- A per-call `permission_mode` overrides it for that call.
+- Either value must be in `allowed_permission_modes`, or `start_session` rejects the call.
+
+##### Keep orchestrator and builders in the same mode
+Claude Code holds a cross-session message for its user's approval when the sender runs in a different permission mode, and may let it expire. So an orchestrator and the builders it starts through Dead Drop should use the same permission mode. This is the behaviour of Claude Code's SendMessage tool, not a Dead Drop guarantee.
+
+The Claude desktop app's own `start_session` (not Dead Drop's) only starts a session in the caller's permission mode or a lower one (as of 2026-10-27).
+
 #### Session Log (`.sessions.jsonl`)
 Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`), tracking `handoff` and `outcome` (`handed_off`, `still_running`, or `background`):
 ```json
