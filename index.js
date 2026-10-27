@@ -153,7 +153,7 @@ server.tool(
     folder: z.string().describe("Absolute path to an existing directory for the session"),
     prompt: z.string().optional().describe("Initial prompt / instructions for the session (required for 'background' mode, optional for 'desktop' mode)"),
     name: z.string().optional().describe("Session name (must not start with '-' or be empty). Defaults to 'deaddrop-<timestamp>'"),
-    model: z.string().optional().describe("Model name (e.g. 'sonnet', 'opus', 'fable'). Defaults to config or 'sonnet'"),
+    model: z.string().optional().describe("Model name or ID (e.g. 'claude-haiku-5-5', 'opus', 'fable'). Defaults to config or 'claude-haiku-5-5'. Models matching agents.claude.blocked_models in config are rejected."),
     effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional().describe("Reasoning effort level"),
     permission_mode: z.string().optional().describe("Permission mode (e.g. 'auto', 'default', 'acceptEdits', 'plan'). Defaults to config or 'auto'"),
     handoff: z.enum(["desktop", "background"]).optional().describe("Handoff mode: 'desktop' or 'background'. Defaults to config or 'desktop'"),

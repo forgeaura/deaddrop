@@ -39,7 +39,7 @@ In desktop mode this tool starts the session, waits for its short bootstrap turn
 - `folder` *(string, required)*: absolute path to an existing directory for the session. The directory must be trusted by Claude Code.
 - `prompt` *(string, optional)*: initial message / instructions for the session (required for `"background"` mode; optional context for `"desktop"` mode). Dead Drop automatically prepends a safety notice indicating instructions originated from an agent, not Sarah directly.
 - `name` *(string, optional)*: session name (default: `deaddrop-<timestamp>`). Must not start with `-` or be empty.
-- `model` *(string, optional)*: model name or ID (default: `"sonnet"` from config).
+- `model` *(string, optional)*: model name or ID (default: `"claude-haiku-5-5"`, or `agents.claude.default_model` from config). A model matching `agents.claude.blocked_models` is rejected before anything launches.
 - `effort` *(string, optional)*: reasoning effort level (`"low"`, `"medium"`, `"high"`, `"xhigh"`, `"max"`).
 - `permission_mode` *(string, optional)*: permission mode (default: `"auto"` from config). Must be in `agents.claude.allowed_permission_modes`.
 - `handoff` *(string, optional, `"desktop"` | `"background"`)*: handoff mode (default: `"desktop"` from config).
@@ -88,7 +88,8 @@ All configuration lives in a single JSON file inside the mailbox folder: `<mailb
     "claude": {
       "wake_on_mail": false,
       "wake_method": "unsupported",
-      "default_model": "sonnet",
+      "default_model": "claude-haiku-5-5",
+      "blocked_models": [],
       "default_permission_mode": "auto",
       "allowed_permission_modes": [
         "auto",
@@ -111,6 +112,8 @@ Each key under `agents` is a recipient name (matched case-insensitively against 
   - `"unsupported"` — this agent cannot be woken from outside at all. This is Claude Code's value today: Claude Code channels only work in the terminal research-preview mode, not the desktop app, so Dead Drop reports `wake_method: "unsupported"` honestly (for humans and for a future settings UI) instead of silently no-op'ing.
 - **`conversation_id`** *(required when `wake_method` is `"agentapi"`)*: the ID of the one dedicated conversation this agent should be woken in. Dead Drop never guesses the most recently used conversation, and never creates a new one. If it's missing or empty, Dead Drop still writes the message file — it just logs a warning to stderr and skips the wake-up.
 - **`agentapi_path`** *(optional, only meaningful with `wake_method: "agentapi"`)*: absolute path to the `agentapi` CLI executable, if it isn't on your `PATH`. Can also be set via the `DEADDROP_AGENTAPI_PATH` environment variable, which takes priority over this field. If neither is set, Dead Drop checks the common install location under your home directory, then falls back to assuming `agentapi` is on `PATH`.
+- **`default_model`** *(optional, Claude only)*: the model `start_session` uses when the caller gives none. Defaults to `"claude-haiku-5-5"` when unset. The settings UI never writes this field; edit it by hand.
+- **`blocked_models`** *(optional, Claude only, default `[]`)*: a list of model denylist patterns. Each pattern is a whole-string glob: `*` matches any run of characters, everything else is literal, and matching is case-insensitive. `"sonnet"` blocks only `sonnet`; `"*sonnet*"` blocks `claude-sonnet-5-5`, `SONNET` and any other model containing `sonnet`. The check runs on the resolved model, so a blocked `default_model` is rejected too. A blocked start fails with an error naming the model and pattern, and nothing is spawned or logged. Malformed values (anything other than an array of non-empty strings) fail closed: every `start_session` for Claude is rejected until the value is fixed. The settings UI never writes this field; edit it by hand.
 
 ### Settings Web UI (`deaddrop settings`)
 
@@ -162,7 +165,7 @@ This starts a lightweight, on-demand local HTTP server that:
 #### Session Log (`.sessions.jsonl`)
 Every spawned session is logged to `<mailbox>/.sessions.jsonl` (e.g. `~/deaddrop/.sessions.jsonl`) with restricted file permissions (`0600`), tracking `handoff` and `outcome` (`handed_off`, `still_running`, or `background`):
 ```json
-{"time":"2026-10-20T12:00:00+08:00","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729468000000","model":"sonnet","effort":"medium","permission_mode":"auto","handoff":"desktop","outcome":"handed_off","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
+{"time":"2026-10-20T12:00:00+08:00","from":"antigravity","folder":"/path/to/repo","name":"deaddrop-1729468000000","model":"claude-haiku-5-5","effort":"medium","permission_mode":"auto","handoff":"desktop","outcome":"handed_off","id":"b73a79df","sessionId":"uuid-value","prompt":"..."}
 ```
 
 #### Viewing Sessions
