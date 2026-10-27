@@ -58,7 +58,7 @@ Starts a new Antigravity (Gemini) conversation with `agentapi new-conversation` 
 
 The result names the conversation ID, the model, the project actually used and where that project came from (the `project` parameter, `.config.json`, or the sidecar), so a caller who forgot `project` can see where the conversation landed. All values are passed to `agentapi` as separate arguments with no shell, and the prompt always follows `--`, so it can never be read as a flag. The session token is passed only in `agentapi`'s environment; it never appears in arguments, results, errors or logs.
 
-`--profile` is deliberately **not supported yet**. Antigravity offers Claude models such as Sonnet 5.5 alongside Gemini, and it isn't yet known what an Antigravity profile can pin, so a profile could start a model Dead Drop must never start. Issue #26 investigates profiles and adds the parameter once it is known to be safe or is covered by a model denylist.
+`--profile` is not supported yet. It isn't yet known what an Antigravity profile can set (for example which model it uses), so a caller couldn't tell what they were starting. Issue #26 investigates profiles and adds the parameter once that's documented.
 
 ---
 
