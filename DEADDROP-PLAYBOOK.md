@@ -27,6 +27,8 @@ database; the risks are **security boundaries** and **breaking other projects' o
 - Values that become CLI arguments (names, models, titles, prompts) are validated: no leading `-`.
 - The "came from an agent, not Sarah" preamble is on every session or conversation Dead Drop starts.
 - The Antigravity CSRF token never appears in output, errors, logs, tests, issues or PRs.
+- A recipient name is not only a config key: `wren` and `rook` get mail with no `.config.json`
+  entry. Anything that claims a name (e.g. `register_as`) checks mailbox history too.
 - Builders never edit `~/deaddrop/.config.json` or the live mailbox `~/deaddrop/`. Tests use a
   temporary `DEADDROP_DIR`. Changes to Sarah's config are made by the orchestrator, with her yes.
 - Real launcher calls (a real `claude --bg`, a real `agentapi new-conversation`) only as many as the
@@ -85,7 +87,7 @@ Gemini 3.8 Flash $0.75/$3.75 (doubles 1 Jan 2027) · Gemini 3.1 Flash Lite $0.25
 | Launcher | Starts | Model choice | Effort | Notes |
 |---|---|---|---|---|
 | Desktop app `start_session` (built in) | Claude Code session in the sidebar, own worktree | Caller's model or cheaper (from Opus: Opus or Haiku) | at or below the caller's | **Preferred for builders.** Cross-session messages work at once. Permission mode at or below the caller's. |
-| Dead Drop `start_session` | Claude Code session via `claude --bg` | Any Claude model, alias or full ID | low…max | Needed for Fable, or effort above the caller's. Falls back to `sonnet` without a model until #24 merges. `handoff: "desktop"` (#22) needs a Dead Drop MCP reconnect. |
+| Dead Drop `start_session` | Claude Code session via `claude --bg` | Any Claude model, alias or full ID | low…max | Needed for Fable, or effort above the caller's. Falls back to `claude-haiku-5-5`; rejects models matching `agents.claude.blocked_models` (#24). Each caller sees this only after reconnecting its Dead Drop MCP. `handoff: "desktop"` (#22) needs a Dead Drop MCP reconnect. |
 | Antigravity `agentapi new-conversation` | Antigravity (Gemini) conversation | `flash_lite`, `flash`, `pro` only; mapping unconfirmed | none | Not in Dead Drop yet (#25); exact models under investigation (#26). Needs `ANTIGRAVITY_PROJECT_ID`. |
 | Dead Drop mail to an `agentapi` agent | Wakes an existing Antigravity conversation | that conversation's | none | Wake fails from the long-running MCP process (#18). |
 
@@ -94,6 +96,8 @@ One row per merged or abandoned PR, so the ledger rests on evidence.
 
 | Date | Issue | Model / effort | Plan approved as sent? | Passed review first time? | Note |
 |---|---|---|---|---|---|
+| 2026-10-27 | #28 | Haiku 5.5 / low | Yes, after 2 rulings | Yes | Flagged two claims with no code behind them instead of inventing support |
+| 2026-10-27 | #24 | Haiku 5.5 / high | Yes, with 4 adjustments | Yes | Found the settings-save-writes-defaults bug itself; +58 assertions; revert checks fail as expected |
 
 ---
 
@@ -191,3 +195,5 @@ Check your own session id at the moment you write the brief.
   migration ledger and production-database rules (no database here).
 - 2026-10-27: Owner correction (#32): Opus needs her explicit yes per session, like Fable. Only
   Haiku starts without asking. Ledger Opus rows marked "(ask)".
+- 2026-10-27 (#35): Wave 1 outcomes logged (#24, #28 on Haiku: both passed review first time).
+  Launcher table updated for the Haiku fallback. Added the recipient-name rule from the #25 review.
