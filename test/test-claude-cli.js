@@ -5,6 +5,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { ensureDirectory } from "../lib/messages.js";
 import { DEFAULT_CONFIG } from "../lib/settings-server.js";
+import { findBlockingPattern } from "../lib/model-policy.js";
 import {
   resolveClaudeExecutable,
   compareSemver,
@@ -136,40 +137,40 @@ export async function runClaudeCliTests(testDir) {
   // 10d: Flag injection checks in startClaudeSession
   console.log("  Testing flag injection guardrails...");
   await assert.rejects(
-    async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", name: "-flagInjection" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: claudeTestDir, prompt: "hi", name: "-flagInjection" }),
     /Invalid session name '-flagInjection'/
   );
   await assert.rejects(
-    async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", name: "" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: claudeTestDir, prompt: "hi", name: "" }),
     /Invalid session name ''/
   );
   await assert.rejects(
-    async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", model: "--inject-flag" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: claudeTestDir, prompt: "hi", model: "--inject-flag" }),
     /Invalid model '--inject-flag'/
   );
   await assert.rejects(
-    async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", effort: "extreme" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: claudeTestDir, prompt: "hi", effort: "extreme" }),
     /Invalid effort 'extreme'/
   );
   await assert.rejects(
-    async () => startClaudeSession({ folder: claudeTestDir, prompt: "hi", handoff: "invalid_mode" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: claudeTestDir, prompt: "hi", handoff: "invalid_mode" }),
     /Invalid handoff mode 'invalid_mode'/
   );
 
   // 10e: Folder validation in startClaudeSession (lives in library)
   console.log("  Testing folder validation in library...");
   await assert.rejects(
-    async () => startClaudeSession({ folder: "./relative-path", prompt: "hi" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: "./relative-path", prompt: "hi" }),
     /folder must be an absolute path/
   );
   await assert.rejects(
-    async () => startClaudeSession({ folder: "/non/existent/path/for/deaddrop/test", prompt: "hi" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: "/non/existent/path/for/deaddrop/test", prompt: "hi" }),
     /folder does not exist/
   );
   const regularFilePath = path.join(claudeTestDir, "not-a-dir.txt");
   fs.writeFileSync(regularFilePath, "file content");
   await assert.rejects(
-    async () => startClaudeSession({ folder: regularFilePath, prompt: "hi" }),
+    async () => startClaudeSession({ deaddropDir: claudeTestDir, folder: regularFilePath, prompt: "hi" }),
     /folder is not a directory/
   );
 
@@ -669,6 +670,119 @@ export async function runClaudeCliTests(testDir) {
   assert.equal(parsedLog.sessionId, "uuid-logged-1234");
   assert.ok(parsedLog.prompt.includes("[Started via Dead Drop by juno."));
   assert.ok(parsedLog.prompt.includes("Log me please"));
+
+  // 10i: Haiku default and blocked_models denylist (no real launcher: execFileFn is recorded, never run)
+  console.log("  Testing Haiku default and blocked_models denylist...");
+  const policySpawns = [];
+  const policyExec = (file, args, opts, cb) => {
+    if (args[0] === "--bg") {
+      policySpawns.push(args);
+      cb(null, "backgrounded · 1234abcd · policy\n", "");
+    } else {
+      cb(null, "[]", "");
+    }
+  };
+  const modelArg = (args) => args[args.indexOf("--model") + 1];
+  const policyDeaddropDir = path.join(claudeTestDir, "policy-deaddrop");
+  const blockedDeaddropDir = path.join(claudeTestDir, "blocked-deaddrop");
+  ensureDirectory(policyDeaddropDir);
+  ensureDirectory(blockedDeaddropDir);
+  const launchPolicy = (overrides) => startClaudeSession({
+    folder: claudeTestDir,
+    prompt: "policy test",
+    handoff: "background",
+    deaddropDir: policyDeaddropDir,
+    execFileFn: policyExec,
+    sleepFn: async () => {},
+    claudeExec: "/fake/claude",
+    ...overrides
+  });
+
+  // No model given and no config file: Haiku, not Sonnet
+  await launchPolicy({});
+  assert.equal(policySpawns.length, 1);
+  assert.equal(modelArg(policySpawns[0]), "claude-haiku-5-5");
+
+  // No model given and config lacks default_model: Haiku
+  await launchPolicy({ config: { agents: { claude: { default_permission_mode: "auto" } } } });
+  assert.equal(modelArg(policySpawns.at(-1)), "claude-haiku-5-5");
+
+  // Explicit blocked models are rejected with the pattern named, before any spawn or log line
+  const sonnetBlockedConfig = { agents: { claude: { blocked_models: ["*sonnet*"] } } };
+  const spawnsBeforeBlocked = policySpawns.length;
+  for (const model of ["sonnet", "claude-sonnet-5-5", "SONNET"]) {
+    await assert.rejects(
+      () => launchPolicy({ model, config: sonnetBlockedConfig, deaddropDir: blockedDeaddropDir }),
+      (err) => err.message === `Model '${model}' is blocked by agents.claude.blocked_models (pattern '*sonnet*'). Choose another model, e.g. claude-haiku-5-5.`
+    );
+  }
+  assert.equal(policySpawns.length, spawnsBeforeBlocked, "blocked models must not spawn");
+  assert.equal(fs.existsSync(path.join(blockedDeaddropDir, ".sessions.jsonl")), false, "blocked models must not log");
+
+  // A blocked default_model is caught too, because the check runs on the resolved model
+  await assert.rejects(
+    () => launchPolicy({
+      config: { agents: { claude: { default_model: "claude-sonnet-5-5", blocked_models: ["claude-sonnet-*"] } } },
+      deaddropDir: blockedDeaddropDir
+    }),
+    /Model 'claude-sonnet-5-5' is blocked by agents\.claude\.blocked_models \(pattern 'claude-sonnet-\*'\)/
+  );
+  assert.equal(policySpawns.length, spawnsBeforeBlocked, "blocked default_model must not spawn");
+  assert.equal(fs.existsSync(path.join(blockedDeaddropDir, ".sessions.jsonl")), false, "blocked default_model must not log");
+
+  // Unblocked models still launch, including Opus under a Sonnet-only denylist
+  for (const model of ["claude-haiku-5-5", "opus"]) {
+    await launchPolicy({ model, config: sonnetBlockedConfig, deaddropDir: blockedDeaddropDir });
+    assert.equal(modelArg(policySpawns.at(-1)), model);
+  }
+
+  // Malformed blocked_models fails closed for every start, even a Haiku one
+  const spawnsBeforeMalformed = policySpawns.length;
+  for (const malformed of ["sonnet", [123], [""], [null], {}]) {
+    await assert.rejects(
+      () => launchPolicy({
+        model: "claude-haiku-5-5",
+        config: { agents: { claude: { blocked_models: malformed } } },
+        deaddropDir: blockedDeaddropDir
+      }),
+      /agents\.claude\.blocked_models must be an array of non-empty strings/
+    );
+  }
+  assert.equal(policySpawns.length, spawnsBeforeMalformed, "malformed blocked_models must not spawn");
+
+  // A non-string default_model fails closed as well
+  await assert.rejects(
+    () => launchPolicy({ config: { agents: { claude: { default_model: 5 } } }, deaddropDir: blockedDeaddropDir }),
+    /model must be a non-empty string/
+  );
+  assert.equal(policySpawns.length, spawnsBeforeMalformed, "non-string default_model must not spawn");
+
+  // An unparseable .config.json fails closed too: defaults would drop the user's blocked_models
+  const corruptDeaddropDir = path.join(claudeTestDir, "corrupt-deaddrop");
+  ensureDirectory(corruptDeaddropDir);
+  fs.writeFileSync(path.join(corruptDeaddropDir, ".config.json"), "{not json");
+  await assert.rejects(
+    () => launchPolicy({ model: "sonnet", deaddropDir: corruptDeaddropDir }),
+    (err) => err.message.includes(path.join(corruptDeaddropDir, ".config.json")) && err.message.includes("is not valid JSON")
+  );
+  assert.equal(policySpawns.length, spawnsBeforeMalformed, "unparseable config must not spawn");
+
+  // findBlockingPattern: whole-string, case-insensitive, literal dots, * spans newlines
+  assert.equal(findBlockingPattern("claude-sonnet-5-5", ["sonnet"]), null, "a bare pattern matches only the whole string");
+  assert.equal(findBlockingPattern("claude-sonnet-5-5", ["*sonnet*"]), "*sonnet*");
+  assert.equal(findBlockingPattern("claude-sonnet-5-5", ["claude-sonnet-*"]), "claude-sonnet-*");
+  assert.equal(findBlockingPattern("SONNET", ["sonnet"]), "sonnet", "matching is case-insensitive");
+  assert.equal(findBlockingPattern("  SONNET  ", ["sonnet"]), "sonnet", "the model is trimmed before matching");
+  assert.equal(findBlockingPattern("claudeXsonnet", ["claude.sonnet"]), null, "regex metacharacters are literal");
+  assert.equal(findBlockingPattern("claude.sonnet", ["claude.sonnet"]), "claude.sonnet");
+  assert.equal(findBlockingPattern("claude\nsonnet", ["*sonnet*"]), "*sonnet*", "the wildcard spans newlines");
+  assert.equal(findBlockingPattern("claude-haiku-5-5", ["*sonnet*", "*opus*"]), null);
+  assert.equal(findBlockingPattern("opus", ["*sonnet*", "*opus*"]), "*opus*");
+  assert.equal(findBlockingPattern("anything", ["*"]), "*");
+  assert.equal(findBlockingPattern("opus", []), null);
+  assert.throws(() => findBlockingPattern("", ["*"]), /model must be a non-empty string/);
+  assert.throws(() => findBlockingPattern("opus", "sonnet"), /blocked_models must be an array of non-empty strings/);
+  assert.throws(() => findBlockingPattern("opus", ["  "]), /blocked_models must be an array of non-empty strings/);
 
   // 10s: End-to-end MCP Client tool call start_session in desktop mode
   console.log("  Testing end-to-end MCP Client start_session in desktop mode...");

@@ -751,7 +751,9 @@ exit 0
       assert.equal(getStateRes.status, 200);
       const stateData = await getStateRes.json();
       assert.ok(stateData.mailboxDir);
-      assert.ok(stateData.config.agents.antigravity);
+      // No .config.json yet: the API reports that and serves no defaults (see 9k)
+      assert.equal(stateData.config_status, "missing");
+      assert.equal(stateData.config.agents, undefined);
       assert.equal(stateData.messages.length, 1);
       assert.equal(stateData.messages[0].subject, "Settings UI Test Message");
       assert.equal(stateData.messages[0].re_issue, "4");
@@ -890,6 +892,95 @@ exit 0
       await closeSettingsServer();
       console.log("✓ Settings server closed cleanly");
     }
+
+    // 9k: default_model and blocked_models are never written by the settings UI or HTTP API
+    console.log("  Testing settings save never writes default_model or blocked_models...");
+    assert.equal(DEFAULT_CONFIG.agents.claude.default_model, "claude-haiku-5-5");
+    assert.deepEqual(DEFAULT_CONFIG.agents.claude.blocked_models, []);
+
+    const policySettingsDir = path.join(testDir, "settings-policy-test");
+    ensureDirectory(policySettingsDir);
+    const policyConfigPath = path.join(policySettingsDir, ".config.json");
+    const readPolicyConfig = () => JSON.parse(fs.readFileSync(policyConfigPath, "utf8"));
+    const writePolicyConfig = (claude) => fs.writeFileSync(policyConfigPath, JSON.stringify({ agents: { claude } }, null, 2));
+    const postPolicyConfig = (serverUrl, agents) => fetch(`${serverUrl}api/config`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agents })
+    });
+    const onDiskClaude = {
+      wake_on_mail: false,
+      wake_method: "unsupported",
+      default_model: "claude-haiku-5-5",
+      blocked_models: ["*sonnet*"],
+      default_permission_mode: "auto"
+    };
+
+    // saveConfig is a library call: it keeps what it is given
+    writePolicyConfig(onDiskClaude);
+    saveConfig(policySettingsDir, { claude: { ...onDiskClaude } });
+    assert.equal(readPolicyConfig().agents.claude.default_model, "claude-haiku-5-5");
+    assert.deepEqual(readPolicyConfig().agents.claude.blocked_models, ["*sonnet*"]);
+
+    // saveConfig refuses to overwrite a file it cannot parse
+    fs.writeFileSync(policyConfigPath, "{not json");
+    assert.throws(
+      () => saveConfig(policySettingsDir, { claude: { ...onDiskClaude } }),
+      (err) => err.message.includes(policyConfigPath) && err.message.includes("is not valid JSON")
+    );
+    assert.equal(fs.readFileSync(policyConfigPath, "utf8"), "{not json", "unparseable config must not be overwritten");
+
+    const policyServer = await startSettingsServer({ port: 0, deaddropDir: policySettingsDir });
+    try {
+      // The UI posts back what /api/state returned; the values must survive unchanged
+      writePolicyConfig(onDiskClaude);
+      const roundTripState = await (await fetch(`${policyServer.url}api/state`)).json();
+      assert.equal(roundTripState.config_status, "ok");
+      assert.equal(roundTripState.config_path, policyConfigPath);
+      const roundTripRes = await postPolicyConfig(policyServer.url, roundTripState.config.agents);
+      assert.equal(roundTripRes.status, 200);
+      assert.equal(readPolicyConfig().agents.claude.default_model, "claude-haiku-5-5");
+      assert.deepEqual(readPolicyConfig().agents.claude.blocked_models, ["*sonnet*"]);
+
+      // A crafted POST cannot unblock Sonnet or change the default
+      const craftedRes = await postPolicyConfig(policyServer.url, {
+        claude: { wake_method: "unsupported", default_model: "sonnet", blocked_models: [] }
+      });
+      assert.equal(craftedRes.status, 200);
+      assert.equal(readPolicyConfig().agents.claude.default_model, "claude-haiku-5-5", "POST must not change default_model");
+      assert.deepEqual(readPolicyConfig().agents.claude.blocked_models, ["*sonnet*"], "POST must not change blocked_models");
+
+      // With no on-disk default_model, a POST must not add one
+      writePolicyConfig({ wake_on_mail: false, wake_method: "unsupported", default_permission_mode: "auto" });
+      const noDefaultRes = await postPolicyConfig(policyServer.url, {
+        claude: { wake_method: "unsupported", default_model: "sonnet", blocked_models: ["*"] }
+      });
+      assert.equal(noDefaultRes.status, 200);
+      assert.equal("default_model" in readPolicyConfig().agents.claude, false, "POST must not write a default_model");
+      assert.equal("blocked_models" in readPolicyConfig().agents.claude, false, "POST must not write blocked_models");
+
+      // Missing file: /api/state serves no defaults and creates nothing; the UI gets a reason
+      fs.rmSync(policyConfigPath);
+      const missingState = await (await fetch(`${policyServer.url}api/state`)).json();
+      assert.equal(missingState.config_status, "missing");
+      assert.equal(missingState.config_path, policyConfigPath);
+      assert.equal(missingState.config.agents, undefined, "missing file must not serve DEFAULT_CONFIG agents");
+      assert.equal(fs.existsSync(policyConfigPath), false, "GET /api/state must not create .config.json");
+
+      // Unparseable file: /api/state says so; POST refuses and leaves the file alone
+      fs.writeFileSync(policyConfigPath, "{not json");
+      const invalidState = await (await fetch(`${policyServer.url}api/state`)).json();
+      assert.equal(invalidState.config_status, "invalid");
+      assert.equal(invalidState.config.agents, undefined);
+      const invalidPostRes = await postPolicyConfig(policyServer.url, { claude: { wake_method: "unsupported" } });
+      assert.equal(invalidPostRes.status, 409);
+      const invalidPostErr = await invalidPostRes.json();
+      assert.ok(invalidPostErr.error.includes(policyConfigPath) && invalidPostErr.error.includes("is not valid JSON"));
+      assert.equal(fs.readFileSync(policyConfigPath, "utf8"), "{not json", "POST must not overwrite an unparseable config");
+    } finally {
+      await policyServer.close();
+    }
+    console.log("✓ Settings save round-trips default_model and blocked_models, and never writes defaults");
 
     // Test 10: Claude CLI & start_session MCP Tool
     await runClaudeCliTests(testDir);

@@ -548,6 +548,8 @@
   <script>
     let currentConfig = null;
     let currentMessages = [];
+    // Why Save is refused when .config.json is absent or unparseable; null when the file loaded.
+    let configProblem = null;
 
     async function fetchState() {
       try {
@@ -556,9 +558,20 @@
         const data = await res.json();
         currentConfig = data.config || {};
         currentMessages = data.messages || [];
-        
+        configProblem = null;
+        if (data.config_status === 'missing') {
+          configProblem = `No config file at ${data.config_path}; create one (see README).`;
+        } else if (data.config_status === 'invalid') {
+          configProblem = `Config file at ${data.config_path} is not valid JSON; fix it by hand.`;
+        }
+
         document.getElementById('mailbox-path').textContent = `Mailbox: ${data.mailboxDir}`;
-        renderAgents(currentConfig.agents || {});
+        if (configProblem) {
+          document.getElementById('agents-container').innerHTML =
+            `<div class="empty-state" style="color: var(--error-text);">${escapeHtml(configProblem)}</div>`;
+        } else {
+          renderAgents(currentConfig.agents || {});
+        }
         renderMessages(currentMessages);
       } catch (err) {
         document.getElementById('agents-container').innerHTML =
@@ -702,6 +715,9 @@
       saveBtn.disabled = true;
 
       try {
+        if (configProblem) {
+          throw new Error(configProblem);
+        }
         if (!currentConfig || !currentConfig.agents) {
           throw new Error('Config not loaded yet');
         }
