@@ -658,6 +658,7 @@ export async function runClaudeCliTests(testDir) {
   const logLines = fs.readFileSync(sessionsLogFile, "utf8").trim().split("\n");
   assert.equal(logLines.length, 1);
   const parsedLog = JSON.parse(logLines[0]);
+  assert.equal(parsedLog.launcher, "claude");
   assert.equal(parsedLog.from, "juno");
   assert.equal(parsedLog.folder, claudeTestDir);
   assert.equal(parsedLog.name, "test-logged-session");
