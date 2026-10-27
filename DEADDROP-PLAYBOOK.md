@@ -27,6 +27,8 @@ database; the risks are **security boundaries** and **breaking other projects' o
 - Values that become CLI arguments (names, models, titles, prompts) are validated: no leading `-`.
 - The "came from an agent, not Sarah" preamble is on every session or conversation Dead Drop starts.
 - The Antigravity CSRF token never appears in output, errors, logs, tests, issues or PRs.
+- A recipient name is not only a config key: `wren` and `rook` get mail with no `.config.json`
+  entry. Anything that claims a name (e.g. `register_as`) checks mailbox history too.
 - Builders never edit `~/deaddrop/.config.json` or the live mailbox `~/deaddrop/`. Tests use a
   temporary `DEADDROP_DIR`. Changes to Sarah's config are made by the orchestrator, with her yes.
 - Real launcher calls (a real `claude --bg`, a real `agentapi new-conversation`) only as many as the
@@ -49,11 +51,12 @@ always run `npm test` locally.
 ## 2. Models
 
 ### 2.1 Standing rules (owner, 2026-10-27)
-- **⛔ Never start a Sonnet 5.5 session.** No exceptions.
 - **Always pass `model` explicitly** on every session start.
 - **Haiku 5.5 is the default builder, and the only model the orchestrator starts without asking.**
-- **Opus 5.5 and Fable 5.1 each need the owner's explicit yes, per session.** "Opus for judgement
-  work" says when to *propose* Opus, not permission to start it. The proposal goes under Action
+- **Sonnet 5.5, Opus 5.5 and Fable 5.1 each need the owner's explicit yes, per session.**
+  Sonnet is not banned: it must stay available whenever the owner wants it. Never put Sonnet in
+  her `blocked_models`, and never cut a feature just because it could reach Sonnet.
+  "Opus for judgement work" says when to *propose* Opus, not permission to start it. The proposal goes under Action
   items and says what Haiku would likely get wrong, the cost difference, and the Haiku fallback
   (e.g. Haiku/high with a tighter brief and a closer review).
 - Before each dispatch, check what the launchers can do (§2.3) and choose model and effort for the
@@ -61,7 +64,7 @@ always run `npm test` locally.
 
 ### 2.2 Routing ledger
 
-Every Opus or Fable row is a proposal for the owner, never a default.
+Every Sonnet, Opus or Fable row is a proposal for the owner, never a default.
 
 | Task type | Model | Effort | Notes |
 |---|---|---|---|
@@ -74,7 +77,7 @@ Every Opus or Fable row is a proposal for the owner, never a default.
 | Independent second-opinion review | Gemini 4 Argon | high | Once Dead Drop can pick it (#25, #26); until then Opus |
 | A Haiku build that failed review twice | Opus 5.5 (ask) | high | |
 | Design docs, architecture | Opus 5.5 high, or Fable 5.1 xhigh | | Fable needs the owner's yes |
-| **Sonnet 5.5** | **never** | | |
+| Sonnet 5.5 | only when the owner asks | | Not a default for any task type |
 
 Prices per million tokens, input/output (from Wren, 2026-10-27): Haiku 5.5 $0.10/$0.50 ·
 Opus 5.5 $4/$20 · Fable 5.1 $10/$50 · Gemini 4 Argon $2/$10 (doubles 1 Dec 2026) ·
@@ -85,7 +88,7 @@ Gemini 3.8 Flash $0.75/$3.75 (doubles 1 Jan 2027) · Gemini 3.1 Flash Lite $0.25
 | Launcher | Starts | Model choice | Effort | Notes |
 |---|---|---|---|---|
 | Desktop app `start_session` (built in) | Claude Code session in the sidebar, own worktree | Caller's model or cheaper (from Opus: Opus or Haiku) | at or below the caller's | **Preferred for builders.** Cross-session messages work at once. Permission mode at or below the caller's. |
-| Dead Drop `start_session` | Claude Code session via `claude --bg` | Any Claude model, alias or full ID | low…max | Needed for Fable, or effort above the caller's. Falls back to `sonnet` without a model until #24 merges. `handoff: "desktop"` (#22) needs a Dead Drop MCP reconnect. |
+| Dead Drop `start_session` | Claude Code session via `claude --bg` | Any Claude model, alias or full ID | low…max | Needed for Fable, or effort above the caller's. Falls back to `claude-haiku-5-5`; rejects models matching `agents.claude.blocked_models` (#24). Each caller sees this only after reconnecting its Dead Drop MCP. `handoff: "desktop"` (#22) needs a Dead Drop MCP reconnect. |
 | Antigravity `agentapi new-conversation` | Antigravity (Gemini) conversation | `flash_lite`, `flash`, `pro` only; mapping unconfirmed | none | Not in Dead Drop yet (#25); exact models under investigation (#26). Needs `ANTIGRAVITY_PROJECT_ID`. |
 | Dead Drop mail to an `agentapi` agent | Wakes an existing Antigravity conversation | that conversation's | none | Wake fails from the long-running MCP process (#18). |
 
@@ -94,6 +97,8 @@ One row per merged or abandoned PR, so the ledger rests on evidence.
 
 | Date | Issue | Model / effort | Plan approved as sent? | Passed review first time? | Note |
 |---|---|---|---|---|---|
+| 2026-10-27 | #28 | Haiku 5.5 / low | Yes, after 2 rulings | Yes | Flagged two claims with no code behind them instead of inventing support |
+| 2026-10-27 | #24 | Haiku 5.5 / high | Yes, with 4 adjustments | Yes | Found the settings-save-writes-defaults bug itself; +58 assertions; revert checks fail as expected |
 
 ---
 
@@ -179,15 +184,23 @@ Check your own session id at the moment you write the brief.
   against it. **Fetch before citing line numbers.**
 - Resuming a background Claude session that is still running, or passing any flag on resume,
   starts a copy. **Wake = stop (only when idle) + bare resume.**
+- 2026-10-27: the brief's "never start Sonnet under any circumstances" was read literally. The
+  orchestrator proposed a hard Sonnet block for the owner's config and cut `profile` from #25 on
+  that basis; the owner had only meant Haiku as the default. **When an absolute-sounding rule would
+  have lasting effects (a config block, a cut feature), check its intent first.**
 - Claude Code's auto-mode classifier blocked `agentapi` commands whose text was full of
   credential language. **Let Dead Drop's library resolve the session; don't hand-assemble it.**
 
 ---
 
 ## 5. Change log
-- 2026-10-27: Created by Rook. Took plan → approve → build, the no-Sonnet rule, Haiku default,
+- 2026-10-27: Created by Rook. Took plan → approve → build, the Sonnet rule, Haiku default,
   routing ledger and launcher table from Wren's playbook; added the Dead Drop security boundary,
   the "other orchestrators depend on this" rules, and the local-only test rule. Dropped Agreezo's
   migration ledger and production-database rules (no database here).
 - 2026-10-27: Owner correction (#32): Opus needs her explicit yes per session, like Fable. Only
   Haiku starts without asking. Ledger Opus rows marked "(ask)".
+- 2026-10-27 (#35): Wave 1 outcomes logged (#24, #28 on Haiku: both passed review first time).
+  Launcher table updated for the Haiku fallback. Added the recipient-name rule from the #25 review.
+- 2026-10-27 (#35): Owner correction: Sonnet is not banned. Haiku is the default; Sonnet, Opus
+  and Fable each need her yes; Sonnet must never be hard-blocked in her config.

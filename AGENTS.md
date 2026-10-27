@@ -28,7 +28,8 @@ Read this before you start. The orchestrator's own rules are in
   `DEADDROP_DIR`.
 - Real launcher calls (`claude --bg`, `agentapi new-conversation`) only as many as your brief
   allows, titled `deaddrop-test: ignore`.
-- Never start a Sonnet 5.5 session, and never write a default that would.
+- Never start any model session yourself (see "Never": no subagents). Dead Drop's own code default
+  is Haiku 5.5; don't change a default model without the orchestrator's say-so.
 
 ## Git and PRs
 - Your own worktree under `worktrees/` from a freshly fetched `origin/main`; branch
