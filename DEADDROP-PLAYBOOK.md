@@ -51,23 +51,28 @@ always run `npm test` locally.
 ### 2.1 Standing rules (owner, 2026-10-27)
 - **⛔ Never start a Sonnet 5.5 session.** No exceptions.
 - **Always pass `model` explicitly** on every session start.
-- **Haiku 5.5 is the default builder.** Opus 5.5 for judgement work (design, tricky logic,
-  security, review). Fable 5.1 only with the owner's yes.
+- **Haiku 5.5 is the default builder, and the only model the orchestrator starts without asking.**
+- **Opus 5.5 and Fable 5.1 each need the owner's explicit yes, per session.** "Opus for judgement
+  work" says when to *propose* Opus, not permission to start it. The proposal goes under Action
+  items and says what Haiku would likely get wrong, the cost difference, and the Haiku fallback
+  (e.g. Haiku/high with a tighter brief and a closer review).
 - Before each dispatch, check what the launchers can do (§2.3) and choose model and effort for the
   task: cost, speed, reasoning depth. Record the outcome in §2.4.
 
 ### 2.2 Routing ledger
+
+Every Opus or Fable row is a proposal for the owner, never a default.
 
 | Task type | Model | Effort | Notes |
 |---|---|---|---|
 | Docs, README, config examples | Haiku 5.5 | low | Orchestrator checks every claim against the code |
 | Small, well-specified code changes with tests (defaults, validation, a new field) | Haiku 5.5 | high | High effort is cheap on Haiku; guardrail code earns it |
 | New MCP tool following an existing tool's pattern | Haiku 5.5 | medium | |
-| Anything that spawns processes, handles the Antigravity secret, or writes shared config | Opus 5.5 | high | Security boundary |
-| Diagnosis of environment-dependent bugs (e.g. #18) | Opus 5.5 | high | Folded into the related feature when it touches the same code |
-| Investigation of an undocumented interface (e.g. Antigravity models) | Opus 5.5 | high | Plan must state findings with evidence before code |
+| Anything that spawns processes, handles the Antigravity secret, or writes shared config | Opus 5.5 (ask) | high | Security boundary |
+| Diagnosis of environment-dependent bugs (e.g. #18) | Opus 5.5 (ask) | high | Folded into the related feature when it touches the same code |
+| Investigation of an undocumented interface (e.g. Antigravity models) | Opus 5.5 (ask) | high | Plan must state findings with evidence before code |
 | Independent second-opinion review | Gemini 4 Argon | high | Once Dead Drop can pick it (#25, #26); until then Opus |
-| A Haiku build that failed review twice | Opus 5.5 | high | |
+| A Haiku build that failed review twice | Opus 5.5 (ask) | high | |
 | Design docs, architecture | Opus 5.5 high, or Fable 5.1 xhigh | | Fable needs the owner's yes |
 | **Sonnet 5.5** | **never** | | |
 
@@ -167,6 +172,8 @@ Check your own session id at the moment you write the brief.
 ## 4. Things that went wrong, so the rules exist
 - Early on, the orchestrator spawned Sonnet build agents directly; the owner wanted another route.
   **Ask before changing who builds.**
+- 2026-10-27: the orchestrator started an Opus planner for #25 without asking, reading "Opus for
+  judgement work" as permission; the owner stopped it. **Only Haiku starts without a yes.**
 - CI fails on billing, not code. **Run `npm test` locally.**
 - The primary checkout's `main` was a merge behind `origin/main` while issues were being written
   against it. **Fetch before citing line numbers.**
@@ -182,3 +189,5 @@ Check your own session id at the moment you write the brief.
   routing ledger and launcher table from Wren's playbook; added the Dead Drop security boundary,
   the "other orchestrators depend on this" rules, and the local-only test rule. Dropped Agreezo's
   migration ledger and production-database rules (no database here).
+- 2026-10-27: Owner correction (#32): Opus needs her explicit yes per session, like Fable. Only
+  Haiku starts without asking. Ledger Opus rows marked "(ask)".
